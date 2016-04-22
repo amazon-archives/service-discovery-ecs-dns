@@ -1,0 +1,140 @@
+{
+	"AWSTemplateFormatVersion" : "2010-09-09",
+	"Description" : "ECS Environment with Service Discovery",
+	"Parameters" : {
+		"ECSCluster": {
+			"Description": "Name of the ECS Cluster",
+			"Type": "String"
+		}
+	},
+	"Resources" : {
+		"TimeDefinition": {
+			"Type" : "AWS::ECS::TaskDefinition",
+  			"Properties" : {
+  				"ContainerDefinitions": [
+  					{
+  						"Name": "time-service",
+	  					"Image": "javieros/time",
+	  					"Cpu": "100",
+	  					"Memory": "100",
+	  					"PortMappings": [
+	  						{
+	  							"ContainerPort": 8081
+	  						}
+	  					],
+	  					"Essential": true,
+	  					"Environment": [
+	  						{
+	  							"Name": "TIME_USERNAME",
+	  							"Value": "admin"
+	  						},
+	  						{
+	  							"Name": "TIME_PASSWORD",
+	  							"Value": "password"
+	  						},
+	  						{
+	  							"Name": "SERVICE_8081_NAME",
+	  							"Value": "time"
+	  						}
+	  					]
+	  				}
+  				]
+  			}
+		},
+		"TimeService": {
+			"Type" : "AWS::ECS::Service",
+			"Properties": {
+				"Cluster": {"Ref": "ECSCluster"},
+				"DesiredCount": 2,
+				"TaskDefinition": {"Ref": "TimeDefinition"}
+			}
+		},
+		"CalcDefinition": {
+			"Type" : "AWS::ECS::TaskDefinition",
+  			"Properties" : {
+  				"ContainerDefinitions": [
+  					{
+  						"Name": "calc-service",
+	  					"Image": "javieros/calc",
+	  					"Cpu": "100",
+	  					"Memory": "100",
+	  					"PortMappings": [
+	  						{
+	  							"ContainerPort": 8081
+	  						}
+	  					],
+	  					"Essential": true,
+	  					"Environment": [
+	  						{
+	  							"Name": "CALC_USERNAME",
+	  							"Value": "admin"
+	  						},
+	  						{
+	  							"Name": "CALC_PASSWORD",
+	  							"Value": "password"
+	  						},
+	  						{
+	  							"Name": "SERVICE_8081_NAME",
+	  							"Value": "calc"
+	  						}
+	  					]
+	  				}
+  				]
+  			}
+		},
+		"CalcService": {
+			"Type" : "AWS::ECS::Service",
+			"Properties": {
+				"Cluster": {"Ref": "ECSCluster"},
+				"DesiredCount": 2,
+				"TaskDefinition": {"Ref": "CalcDefinition"}
+			}
+		},
+		"PortalDefinition": {
+			"Type" : "AWS::ECS::TaskDefinition",
+  			"Properties" : {
+  				"ContainerDefinitions": [
+  					{
+  						"Name": "portal-service",
+	  					"Image": "javieros/portal",
+	  					"Cpu": "200",
+	  					"Memory": "200",
+	  					"PortMappings": [
+	  						{
+	  							"ContainerPort": 8080,
+	  							"HostPort": 80
+	  						}
+	  					],
+	  					"Essential": true,
+	  					"Environment": [
+	  						{
+	  							"Name": "CALC_USERNAME",
+	  							"Value": "admin"
+	  						},
+	  						{
+	  							"Name": "CALC_PASSWORD",
+	  							"Value": "password"
+	  						},
+	  						{
+	  							"Name": "TIME_USERNAME",
+	  							"Value": "admin"
+	  						},
+	  						{
+	  							"Name": "TIME_PASSWORD",
+	  							"Value": "password"
+	  						}
+	  					]
+	  				}
+  				]
+  			}
+		},
+		"PortalService": {
+			"Type" : "AWS::ECS::Service",
+			"Properties": {
+				"Cluster": {"Ref": "ECSCluster"},
+				"DesiredCount": 1,
+				"TaskDefinition": {"Ref": "PortalDefinition"}
+			}
+		}
+	}
+}

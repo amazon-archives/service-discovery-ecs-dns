@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <style type="text/css">
+    body {
+      font-family: arial;
+      font-size: 14px;
+    }
+
+    .liveExample {
+      padding: 1em;
+      background-color: #EEEEDD;
+      border: 1px solid #CCC;
+      max-width: 655px;
+    }
+
+    .liveExample input {
+      font-family: Arial;
+    }
+
+    .liveExample b {
+      font-weight: bold;
+    }
+
+    .liveExample p {
+      margin-top: 0.9em;
+      margin-bottom: 0.9em;
+    }
+
+    .liveExample select[multiple] {
+      width: 100%;
+      height: 8em;
+    }
+
+    .liveExample h2 {
+      margin-top: 0.4em;
+    }
+
+    .ko-grid {
+      margin-bottom: 1em;
+      width: 25em;
+      border: 1px solid silver;
+      background-color: White;
+    }
+
+    .ko-grid th {
+      text-align: left;
+      background-color: Black;
+      color: White;
+    }
+
+    .ko-grid td,
+    th {
+      padding: 0.4em;
+    }
+
+    .ko-grid tr:nth-child(odd) {
+      background-color: #DDD;
+    }
+
+    .ko-grid-pageLinks {
+      margin-bottom: 1em;
+    }
+
+    .ko-grid-pageLinks a {
+      padding: 0.5em;
+    }
+
+    .ko-grid-pageLinks a.selected {
+      background-color: Black;
+      color: White;
+    }
+
+    .liveExample {
+      height: 20em;
+      overflow: auto
+    }
+    /* Mobile Safari reflows pages slowly, so fix the height to avoid the need for reflows */
+
+    li {
+      list-style-type: disc;
+      margin-left: 20px;
+    }
+  </style>
+
+
+  <title>ECS Bootcamp Microservices demo</title>
+  <script type="text/javascript" src="http://knockoutjs.com/downloads/knockout-3.2.0.js"></script>
+  <script type="text/javascript" src="http://knockoutjs.com/examples/resources/knockout.simpleGrid.3.0.js"></script>
+  <script type="text/javascript" src="http://code.jquery.com/jquery-1.6.2.js"></script>
+
+</head>
+
+<body>
+  <!-- Start your code here -->
+  <h1>Time</h1>
+  <div class="liveExample">
+
+    <form data-bind="submit: addTime">
+      Add time:
+      <input data-bind="value: newTimeText" placeholder="Enter time format">
+      <button type="submit">Add</button>
+    </form>
+
+    <div data-bind="simpleGrid: timeGridViewModel"></div>
+
+    <button data-bind="click: timeJumpToFirstPage, enable: timeGridViewModel.currentPageIndex" disabled="">
+      Jump to first page
+    </button>
+
+    <div></div>
+    <div>You can use any combination of the following standard date as format:</div>
+    <div>Mon Jan 2 15:04:05 -0700 MST 2006</div>
+    <div>For example: "15:04 Jan 2"</div>
+
+  </div>
+
+  <h1>Calc</h1>
+  <div class="liveExample">
+
+    <form data-bind="submit: addCalc">
+      Add calc:
+      <input data-bind="value: newCalcText" placeholder="Enter calc formula">
+      <button type="submit">Add</button>
+    </form>
+
+    <div data-bind="simpleGrid: calcGridViewModel"></div>
+
+    <button data-bind="click: calcJumpToFirstPage, enable: calcGridViewModel.currentPageIndex" disabled="">
+      Jump to first page
+    </button>
+
+    <div></div>
+    <div>Write any mathematical formula, like "(2+2)*3"</div>
+  </div>
+
+  <!-- End your code here -->
+
+  <script>
+
+    var PagedGridModel = function(time, calc) {
+      var self = this;
+      self.time = ko.observableArray(time);
+      self.calc = ko.observableArray(calc);
+      self.newTimeText = ko.observable();
+      self.newCalcText = ko.observable();
+
+      // Operations
+      self.addTime = function() {
+        // Load initial state from server, convert it to Task instances, then populate self.tasks
+        $.getJSON("/time/" + this.newTimeText(), function(allData) {
+          console.log("Got response: " + JSON.stringify(allData));
+          if (!allData.hasOwnProperty('error')) {
+            self.time.push(allData);
+            self.newTimeText("");
+          }
+        }).done(function(msg) {
+          if (msg.hasOwnProperty('error')) {
+            alert("Error is: " + msg.error);
+          } else if (msg.containerid && msg.instanceid) {
+            alert("Container ID is: " + msg.containerid +
+                    ", Instance ID is: " + msg.instanceid);
+          }
+        });
+      };
+
+      self.timeJumpToFirstPage = function() {
+        self.timeGridViewModel.currentPageIndex(0);
+      };
+
+      self.timeGridViewModel = new ko.simpleGrid.viewModel({
+        data: self.time,
+        columns: [{
+          headerText: "Time result",
+          rowText: "value"
+        }],
+        pageSize: 4
+      });
+
+      // Operations
+      self.addCalc= function() {
+        // Load initial state from server, convert it to Task instances, then populate self.tasks
+        $.getJSON("/calc/" + this.newCalcText(), function(allData) {
+          console.log("Got response: " + JSON.stringify(allData));
+          if (!allData.hasOwnProperty('error')) {
+            self.calc.push(allData);
+            self.newCalcText("");
+          }
+        }).done(function(msg) {
+          if (msg.hasOwnProperty('error')) {
+            alert("Error is: " + msg.error);
+          } else if (msg.containerid && msg.instanceid) {
+            alert("Container ID is: " + msg.containerid +
+                  ", Instance ID is: " + msg.instanceid);
+          }
+        });
+      };
+
+      self.calcJumpToFirstPage = function() {
+        self.calcGridViewModel.currentPageIndex(0);
+      };
+
+      self.calcGridViewModel = new ko.simpleGrid.viewModel({
+        data: self.calc,
+        columns: [{
+          headerText: "Result",
+          rowText: "value"
+        }],
+        pageSize: 4
+      });
+
+    };
+
+    ko.applyBindings(new PagedGridModel([], []));
+  </script>
+</body>
