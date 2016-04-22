@@ -63,13 +63,13 @@
 					"config" : {
 						"files" : {
 							"/etc/init/ecssd_agent.conf" : {
-								"source"  : "https://raw.githubusercontent.com/jros2300/ecssd_agent/master/ecssd_agent.conf",
+								"source"  : "https://raw.githubusercontent.com/awslabs/service-discovery-ecs-dns/1.0/ecssd_agent.conf",
 								"mode"    : "000644",
 								"owner"   : "root",
 								"group"   : "root"
 							},
 							"/usr/local/bin/ecssd_agent": {
-								"source"  : "https://github.com/jros2300/ecssd_agent/releases/download/1.1/ecssd_agent",
+								"source"  : "https://github.com/awslabs/service-discovery-ecs-dns/releases/download/1.0/ecssd_agent",
 								"mode"    : "000755",
 								"owner"   : "root",
 								"group"   : "root"
