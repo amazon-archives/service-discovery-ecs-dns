@@ -2,19 +2,436 @@
 	"AWSTemplateFormatVersion" : "2010-09-09",
 	"Description" : "ECS Environment with Service Discovery",
 	"Parameters" : {
-		"ECSCluster": {
-			"Description": "Name of the ECS Cluster",
-			"Type": "String"
-		}
+		"KeyName" : {
+            "Type" : "AWS::EC2::KeyPair::KeyName",
+            "Description" : "Name of an existing EC2 KeyPair"
+        },
+        "ECSInstanceType" : {
+            "Type" : "String",
+            "Description" : "ECS instance type",
+            "Default" : "t2.micro",
+            "AllowedValues" : [ "t2.micro", "t2.small", "t2.medium" ],
+            "ConstraintDescription" : "Must be t2.micro, t2.small, t2.medium"
+        },
+        "ECSClusterInstanceCount" : {
+            "Type" : "Number",
+            "Description" : "The number of EC2 instances in the ECS Cluster",
+            "Default" : "2",
+            "AllowedValues" : [ "2", "3", "4" ]
+        }
 	},
+	"Mappings" : {
+        "AmazonLinuxAMI" : {
+            "us-east-1" : {
+                "AMI" : "ami-67a3a90d"
+            },
+            "us-west-1" : {
+                "AMI" : "ami-b7d5a8d7"
+            },
+            "us-west-2" : {
+                "AMI" : "ami-c7a451a7"
+            },
+            "eu-west-1" : {
+                "AMI" : "ami-9c9819ef"
+            },
+            "eu-central-1" : {
+                "AMI" : "ami-9aeb0af5"
+            },
+            "ap-northeast-1" : {
+                "AMI" : "ami-7e4a5b10"
+            },
+            "ap-southeast-1" : {
+                "AMI" : "ami-be63a9dd"
+            },
+            "ap-southeast-2" : {
+                "AMI" : "ami-b8cbe8db"
+            }
+        },
+        "VPCLayout" : {
+            "VPC" : { "CIDR" : "10.5.0.0/16" },
+            "PublicSubnet1Config" : { "CIDR" : "10.5.10.0/24" },
+            "PublicSubnet2Config" : { "CIDR" : "10.5.15.0/24" }
+        }
+    },
 	"Resources" : {
+		"VPC" : {
+            "Type" : "AWS::EC2::VPC",
+            "Properties" : {
+                "EnableDnsSupport" : "true",
+                "EnableDnsHostnames" : "true",
+                "CidrBlock" :  { "Fn::FindInMap" : [ "VPCLayout", "VPC", "CIDR" ]},
+                "Tags" : [
+                    {
+                        "Key" : "VPC",
+                        "Value" : "ECS"
+                    },
+                    {
+                        "Key" : "Name",
+                        "Value" : "ECS refarch service discovery"
+                    }
+                ]
+            }
+        },
+        "HostedZone": {
+			"Type": "AWS::Route53::HostedZone",
+			"Properties": {
+				"HostedZoneConfig": { "Comment": "Hosted Zone for ECS Service Discovery" },
+				"Name": "servicediscovery.internal",
+				"VPCs": [{
+					"VPCId": { "Ref": "VPC" },
+					"VPCRegion": {"Ref": "AWS::Region"}
+				}]
+			}
+		},
+        "InternetGateway" : {
+            "Type" : "AWS::EC2::InternetGateway",
+            "DependsOn" : "VPC"
+        },
+        "AttachGateway" : {
+            "Type" : "AWS::EC2::VPCGatewayAttachment",
+            "DependsOn" : [
+                "VPC",
+                "InternetGateway"
+            ],
+            "Properties" : {
+                "VpcId" : {
+                    "Ref" : "VPC"
+                },
+                "InternetGatewayId" : {
+                    "Ref" : "InternetGateway"
+                }
+            }
+        },
+        "PublicSubnet1" : {
+            "Type" : "AWS::EC2::Subnet",
+            "DependsOn" : "AttachGateway",
+            "Properties" : {
+                "VpcId" : { "Ref" : "VPC" },
+                "CidrBlock" : { "Fn::FindInMap" : [ "VPCLayout", "PublicSubnet1Config", "CIDR" ]},
+                "AvailabilityZone" : {
+                    "Fn::Select" : [
+                        "0",
+                        {
+                            "Fn::GetAZs" : ""
+                        }
+                    ]
+                },
+                "Tags" : [
+                    {
+                        "Key" : "Name",
+                        "Value" : "Public Subnet 1"
+                    }
+                ]
+            }
+        },
+        "PublicSubnet2" : {
+            "Type" : "AWS::EC2::Subnet",
+            "DependsOn" : "AttachGateway",
+            "Properties" : {
+                "VpcId" : { "Ref" : "VPC" },
+                "CidrBlock" : { "Fn::FindInMap" : [ "VPCLayout", "PublicSubnet2Config", "CIDR" ]},
+                "AvailabilityZone" : {
+                    "Fn::Select" : [
+                        "1",
+                        {
+                            "Fn::GetAZs" : ""
+                        }
+                    ]
+                },
+                "Tags" : [
+                    {
+                        "Key" : "Name",
+                        "Value" : "Public Subnet 2"
+                    }
+                ]
+            }
+        },
+        "PublicRouteTable" : {
+            "Type" : "AWS::EC2::RouteTable",
+            "DependsOn" : [
+                "VPC",
+                "AttachGateway"
+            ],
+            "Properties" : {
+                "VpcId" : {
+                    "Ref" : "VPC"
+                },
+                "Tags" : [
+                    {
+                        "Key" : "Name",
+                        "Value" : "Public"
+                    }
+                ]
+            }
+        },
+        "PublicRoute" : {
+            "Type" : "AWS::EC2::Route",
+            "DependsOn" : [
+                "PublicRouteTable",
+                "AttachGateway"
+            ],
+            "Properties" : {
+                "RouteTableId" : {
+                    "Ref" : "PublicRouteTable"
+                },
+                "DestinationCidrBlock" : "0.0.0.0/0",
+                "GatewayId" : {
+                    "Ref" : "InternetGateway"
+                }
+            }
+        },
+        "PublicSubnet1RouteTableAssociation" : {
+            "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+            "DependsOn" : [
+                "PublicRouteTable",
+                "PublicSubnet1",
+                "AttachGateway"
+            ],
+            "Properties" : {
+                "SubnetId" : {
+                    "Ref" : "PublicSubnet1"
+                },
+                "RouteTableId" : {
+                    "Ref" : "PublicRouteTable"
+                }
+            }
+        },
+        "PublicSubnet2RouteTableAssociation" : {
+            "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+            "DependsOn" : [
+                "PublicRouteTable",
+                "PublicSubnet2"
+            ],
+            "Properties" : {
+                "SubnetId" : {
+                    "Ref" : "PublicSubnet2"
+                },
+                "RouteTableId" : {
+                    "Ref" : "PublicRouteTable"
+                }
+            }
+        },
+        "ECSInstanceSecurityGroup" : {
+            "Type" : "AWS::EC2::SecurityGroup",
+            "DependsOn" : "AttachGateway",
+            "Properties" : {
+                "GroupDescription" : "Security Group for ECSInstance",
+                "VpcId" : {
+                    "Ref" : "VPC"
+                },
+                "Tags" : [
+                    {
+                        "Key" : "Name",
+                        "Value" : "ECSInstanceSecurityGroup"
+                    }
+                ]
+            }
+        },
+        "ECSInstanceSecurityGroupApps" : {
+            "Type" : "AWS::EC2::SecurityGroupIngress",
+            "DependsOn" : "ECSInstanceSecurityGroup",
+            "Properties" : {
+                "GroupId" : { "Ref" : "ECSInstanceSecurityGroup" },
+                "IpProtocol" : "tcp",
+                "FromPort" : 0,
+                "ToPort" : 65535,
+                "SourceSecurityGroupId" : { "Ref" : "ECSInstanceSecurityGroup" }
+            }
+        },
+        "ECSInstanceSecurityGroupAppsSSH" : {
+            "Type" : "AWS::EC2::SecurityGroupIngress",
+            "DependsOn" : "ECSInstanceSecurityGroup",
+            "Properties" : {
+                "GroupId" : { "Ref" : "ECSInstanceSecurityGroup" },
+                "IpProtocol" : "tcp",
+                "FromPort" : 22,
+                "ToPort" : 22,
+                "CidrIp" : "0.0.0.0/0"
+            }
+        },
+        "ECSInstanceSecurityGroupAppsWeb" : {
+            "Type" : "AWS::EC2::SecurityGroupIngress",
+            "DependsOn" : "ECSInstanceSecurityGroup",
+            "Properties" : {
+                "GroupId" : { "Ref" : "ECSInstanceSecurityGroup" },
+                "IpProtocol" : "tcp",
+                "FromPort" : 80,
+                "ToPort" : 80,
+                "CidrIp" : "0.0.0.0/0"
+            }
+        },
+        "LaunchConfig": {
+			"Type": "AWS::AutoScaling::LaunchConfiguration",
+			"Metadata" : {
+				"Comment" : "Install a simple application",
+				"AWS::CloudFormation::Init" : {
+					"config" : {
+						"files" : {
+							"/etc/init/ecssd_agent.conf" : {
+								"source"  : "https://raw.githubusercontent.com/awslabs/service-discovery-ecs-dns/1.0/ecssd_agent.conf",
+								"mode"    : "000644",
+								"owner"   : "root",
+								"group"   : "root"
+							},
+							"/usr/local/bin/ecssd_agent": {
+								"source"  : "https://github.com/awslabs/service-discovery-ecs-dns/releases/download/1.0/ecssd_agent",
+								"mode"    : "000755",
+								"owner"   : "root",
+								"group"   : "root"
+							}
+						}
+					}
+				}
+			},
+			"Properties": {
+				"KeyName": { "Ref": "KeyName" },
+				"ImageId": { "Fn::FindInMap" : [ "AmazonLinuxAMI", { "Ref" : "AWS::Region" }, "AMI" ] },
+				"SecurityGroups": [ { "Ref": "ECSInstanceSecurityGroup" } ],
+				"InstanceType": { "Ref": "ECSInstanceType" },
+				"AssociatePublicIpAddress" : "true",
+				"IamInstanceProfile": { "Fn::GetAtt" : ["InstanceProfile", "Arn"] },
+				"UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+					"#!/bin/bash\n",
+					"echo ECS_CLUSTER=", {"Ref": "ECSCluster"}, " >> /etc/ecs/ecs.config\n",
+					"yum install -y aws-cfn-bootstrap\n",
+					"yum update -y aws-cfn-bootstrap\n",
+					"/opt/aws/bin/cfn-init -v ",
+      				"         --stack ", { "Ref" : "AWS::StackName" },
+      				"         --resource LaunchConfig ",
+      				"         --region ", { "Ref" : "AWS::Region" }, "\n",
+      				"start ecssd_agent\n"
+				]]}}
+			}
+		},
+		"ServerGroup": {
+			"Type": "AWS::AutoScaling::AutoScalingGroup",
+			"Properties": {
+				"AvailabilityZones" : [
+                    { "Fn::GetAtt" : [ "PublicSubnet1", "AvailabilityZone" ] },
+                    { "Fn::GetAtt" : [ "PublicSubnet2", "AvailabilityZone" ] }
+                ],
+                "VPCZoneIdentifier" : [
+                    { "Ref" : "PublicSubnet1" },
+                    { "Ref" : "PublicSubnet2" }
+                ],
+				"LaunchConfigurationName": { "Ref": "LaunchConfig" },
+				"MinSize": {"Ref": "ECSClusterInstanceCount"},
+				"MaxSize": {"Ref": "ECSClusterInstanceCount"},
+				"DesiredCapacity": {"Ref": "ECSClusterInstanceCount"},
+				"Tags" : [
+                    { "Key" : "Application", "Value" : { "Ref" : "AWS::StackName" }, "PropagateAtLaunch" : "true" },
+                    { "Key" : "Name", "Value" : "ECS refarch instance", "PropagateAtLaunch" : "true" }
+                ]
+			}
+		},
+		"InstanceRole": {
+		 	"Type": "AWS::IAM::Role",
+		 	"Properties": {
+				"AssumeRolePolicyDocument": {
+					"Version" : "2012-10-17",
+					"Statement": [ {
+						"Effect": "Allow",
+						"Principal": {
+							"Service": [ "ec2.amazonaws.com" ]
+					 	},
+						"Action": [ "sts:AssumeRole" ]
+					} ]
+				},
+			 	"ManagedPolicyArns": [
+			 		"arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role",
+			 		"arn:aws:iam::aws:policy/AmazonRoute53FullAccess",
+			 		"arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess"
+				],
+				"Path": "/"
+			}
+		},
+		"InstanceProfile": {
+			"Type": "AWS::IAM::InstanceProfile",
+			"Properties": {
+				"Path": "/",
+				"Roles": [ {
+					"Ref": "InstanceRole"
+				} ]
+			}
+		},
+		"ECSCluster": {
+			"Type": "AWS::ECS::Cluster",
+			"DependsOn" : "HostedZone"
+		},
+		"TimeRepository": {
+			"Type" : "AWS::ECR::Repository",
+			"Properties" : {
+				"RepositoryName" : "time-demo-service"
+			}
+		},
+		"CalcRepository": {
+			"Type" : "AWS::ECR::Repository",
+			"Properties" : {
+				"RepositoryName" : "calc-demo-service"
+			}
+		},
+		"PortalRepository": {
+			"Type" : "AWS::ECR::Repository",
+			"Properties" : {
+				"RepositoryName" : "portal-demo-service"
+			}
+		},
+		"DockerBuildWaitHandle" : {
+			"Type" : "AWS::CloudFormation::WaitConditionHandle"
+		},
+		"DockerBuildWaitCondition" : {
+			"Type" : "AWS::CloudFormation::WaitCondition",
+			"DependsOn" : "DockerBuilder",
+			"Properties" : {
+				"Handle" : { "Ref" : "DockerBuildWaitHandle" },
+				"Timeout" : "3600"
+			}
+		},
+		"DockerBuilder": {
+			"Type": "AWS::EC2::Instance",
+			"DependsOn": [ "TimeRepository", "CalcRepository", "PortalRepository" ],
+			"Properties": {
+				"KeyName": { "Ref": "KeyName" },
+				"ImageId": { "Fn::FindInMap" : [ "AmazonLinuxAMI", { "Ref" : "AWS::Region" }, "AMI" ] },
+				"InstanceType": { "Ref": "ECSInstanceType" },
+				"IamInstanceProfile": { "Ref" : "InstanceProfile" },
+				"NetworkInterfaces": [ {
+					"AssociatePublicIpAddress": "true",
+					"DeviceIndex": "0",
+					"GroupSet": [{ "Ref" : "ECSInstanceSecurityGroup" }],
+					"SubnetId": { "Ref" : "PublicSubnet1" }
+				} ],
+				"UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+ 					"#!/bin/bash\n",
+ 					"yum install -y aws-cfn-bootstrap\n",
+ 					"yum update -y aws-cfn-bootstrap\n",
+ 					"yum install -y git aws-cli\n",
+ 					"git clone https://github.com/awslabs/service-discovery-ecs-dns.git\n",
+ 					"$(aws ecr get-login --region ", { "Ref": "AWS::Region" }, ")\n",
+ 					"docker build -t ", { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/time-demo-service service-discovery-ecs-dns/sample/time\n",
+ 					"docker build -t ", { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/calc-demo-service service-discovery-ecs-dns/sample/calc\n",
+ 					"docker build -t ", { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/portal-demo-service service-discovery-ecs-dns/sample/portal\n",
+ 					"docker push ", { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/time-demo-service\n",
+ 					"docker push ", { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/calc-demo-service\n",
+ 					"docker push ", { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/portal-demo-service\n",
+ 					"/opt/aws/bin/cfn-signal -e 0 -r \"Build Process Complete\" '", { "Ref" : "DockerBuildWaitHandle" }, "'\n"
+				]]}},
+				"Tags" : [
+                    { "Key" : "Application", "Value" : { "Ref" : "AWS::StackName" } },
+                    { "Key" : "Name", "Value" : "ECS refarch instance docker builder" }
+                ]
+			}
+		},
 		"TimeDefinition": {
 			"Type" : "AWS::ECS::TaskDefinition",
+			"DependsOn": "DockerBuildWaitCondition",
   			"Properties" : {
   				"ContainerDefinitions": [
   					{
   						"Name": "time-service",
-	  					"Image": "javieros/time",
+	  					"Image": { "Fn::Join" : ["", [
+	  						{ "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/time-demo-service:latest"
+	  					]]},
 	  					"Cpu": "100",
 	  					"Memory": "100",
 	  					"PortMappings": [
@@ -51,11 +468,14 @@
 		},
 		"CalcDefinition": {
 			"Type" : "AWS::ECS::TaskDefinition",
+			"DependsOn": "DockerBuildWaitCondition",
   			"Properties" : {
   				"ContainerDefinitions": [
   					{
   						"Name": "calc-service",
-	  					"Image": "javieros/calc",
+	  					"Image": { "Fn::Join" : ["", [
+	  						{ "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/calc-demo-service:latest"
+	  					]]},
 	  					"Cpu": "100",
 	  					"Memory": "100",
 	  					"PortMappings": [
@@ -92,11 +512,14 @@
 		},
 		"PortalDefinition": {
 			"Type" : "AWS::ECS::TaskDefinition",
+			"DependsOn": "DockerBuildWaitCondition",
   			"Properties" : {
   				"ContainerDefinitions": [
   					{
   						"Name": "portal-service",
-	  					"Image": "javieros/portal",
+	  					"Image": { "Fn::Join" : ["", [
+	  						{ "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/portal-demo-service:latest"
+	  					]]},
 	  					"Cpu": "200",
 	  					"Memory": "200",
 	  					"PortMappings": [
