@@ -13,7 +13,7 @@ Some of the tenets are:
 ## Installation
 You need a private hosted zone in Route53 to register all the containers for each service. 
 
-To create an ECS Cluster with all the required configuration and the Route53 domain and the example micro-services you can use the CloudFormation template "Service_Discovery_Using_DNS_Base.template".
+To create an ECS Cluster with all the required configuration and the Route53 domain and the example micro-services you can use the CloudFormation template "Service_Discovery_Using_DNS.template".
 
 You should create a Lambda function to monitor the services, in case a host fails completely and the agent cannot delete the records. You can also use the Lambda function to do HTTP health checks for your containers.
 
@@ -65,7 +65,7 @@ curl -u admin:password 127.0.0.1:32799/calc/\(2+2\)*3
 ```
 * portal: This is a web service to provide a web portal with two boxes to test time and calc services. The portal uses the service discovery DNS to discover the other services and send the request to them showing the results in the web page.
 
-You can launch the examples using the cloudformation template "Service_Discovery_Using_DNS_Base.template", then you can connect to the portal from a browser and test both microservices and the service discovery.
+You can launch the examples using the cloudformation template "Service_Discovery_Using_DNS.template", then you can connect to the portal from a browser and test both microservices and the service discovery.
 
 You can review the Route53 records created by the service (only for time and calc, because portal is not a microservice and it doesn't provide the SERVICE_\<port>_NAME env variable), and stop a container to see how the Route53 records change automatically.
 
