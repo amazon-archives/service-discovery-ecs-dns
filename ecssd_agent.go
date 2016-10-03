@@ -19,14 +19,16 @@ import (
 	"strconv"
 )
 
-const workerTimeout = 60 * time.Second
+const workerTimeout = 180 * time.Second
+const defaultTTL = 0
+const defaultWeight = 1
 
-type Handler interface {
+type handler interface {
 	Handle(*docker.APIEvents) error
 }
 
-type DockerRouter struct {
-	handlers      map[string][]Handler
+type dockerRouter struct {
+	handlers      map[string][]handler
 	dockerClient  *docker.Client
 	listener      chan *docker.APIEvents
 	workers       chan *worker
@@ -34,13 +36,13 @@ type DockerRouter struct {
 }
 
 func dockerEventsRouter(bufferSize int, workerPoolSize int, dockerClient *docker.Client,
-	handlers map[string][]Handler) (*DockerRouter, error) {
+	handlers map[string][]handler) (*dockerRouter, error) {
 	workers := make(chan *worker, workerPoolSize)
 	for i := 0; i < workerPoolSize; i++ {
 		workers <- &worker{}
 	}
 
-	dockerRouter := &DockerRouter{
+	dockerRouter := &dockerRouter{
 		handlers:      handlers,
 		dockerClient:  dockerClient,
 		listener:      make(chan *docker.APIEvents, bufferSize),
@@ -51,28 +53,32 @@ func dockerEventsRouter(bufferSize int, workerPoolSize int, dockerClient *docker
 	return dockerRouter, nil
 }
 
-func (e *DockerRouter) start() error {
+func (e *dockerRouter) start() error {
 	go e.manageEvents()
-	err := e.dockerClient.AddEventListener(e.listener)
-	return err
+	return e.dockerClient.AddEventListener(e.listener)
 }
 
-func (e *DockerRouter) stop() error {
+func (e *dockerRouter) stop() error {
 	if e.listener == nil {
 		return nil
 	}
-	err := e.dockerClient.RemoveEventListener(e.listener)
-	return err
+	return e.dockerClient.RemoveEventListener(e.listener)
 }
 
-func (e *DockerRouter) manageEvents() {
+func (e *dockerRouter) manageEvents() {
 	for {
 		event := <-e.listener
 		timer := time.NewTimer(e.workerTimeout)
 		gotWorker := false
+		// Wait until we get a free worker or a timeout
+		// there is a limit in the number of concurrent events managed by workers to avoid resource exhaustion
+		// so we wait until we have a free worker or a timeout occurs
 		for !gotWorker {
 			select {
 			case w := <-e.workers:
+				if !timer.Stop() {
+					<-timer.C
+				}
 				go w.doWork(event, e)
 				gotWorker = true
 			case <-timer.C:
@@ -84,7 +90,7 @@ func (e *DockerRouter) manageEvents() {
 
 type worker struct{}
 
-func (w *worker) doWork(event *docker.APIEvents, e *DockerRouter) {
+func (w *worker) doWork(event *docker.APIEvents, e *dockerRouter) {
 	defer func() { e.workers <- w }()
 	if handlers, ok := e.handlers[event.Status]; ok {
 		log.Infof("Processing event: %#v", event)
@@ -104,32 +110,32 @@ func (th *dockerHandler) Handle(event *docker.APIEvents) error {
 	return th.handlerFunc(event)
 }
 
-type Config struct {
+type config struct {
 	EcsCluster   string
 	Region       string
 	HostedZoneId string
 	Hostname     string
 }
 
-var config Config
+var configuration config
 
-func testError(err error) {
+func logErrorAndFail(err error) {
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func testErrorNoFatal(err error) {
+func logErrorNoFatal(err error) {
 	if err != nil {
 		log.Error(err)
 	}
 }
 
-type TopTasks struct {
-	Tasks []TaskInfo
+type topTasks struct {
+	Tasks []taskInfo
 }
 
-type TaskInfo struct {
+type taskInfo struct {
 	Arn           string
 	DesiredStatus string
 	KnownStatus   string
@@ -154,7 +160,7 @@ func getDNSHostedZoneId() (string, error) {
 
 	if err == nil {
 		if len(zones.HostedZones) > 0 {
-			return *zones.HostedZones[0].Id, nil
+			return aws.StringValue(zones.HostedZones[0].Id), nil
 		}
 	}
 
@@ -163,6 +169,7 @@ func getDNSHostedZoneId() (string, error) {
 
 func createDNSRecord(serviceName string, dockerId string, port string) error {
 	r53 := route53.New(session.New())
+	// This API call creates a new DNS record for this service
 	params := &route53.ChangeResourceRecordSetsInput{
 		ChangeBatch: &route53.ChangeBatch{
 			Changes: []*route53.Change{
@@ -170,40 +177,47 @@ func createDNSRecord(serviceName string, dockerId string, port string) error {
 					Action: aws.String(route53.ChangeActionCreate),
 					ResourceRecordSet: &route53.ResourceRecordSet{
 						Name: aws.String(serviceName + ".servicediscovery.internal"),
+						// It creates a SRV record with the name of the service
 						Type: aws.String(route53.RRTypeSrv),
 						ResourceRecords: []*route53.ResourceRecord{
 							{
-								Value: aws.String("1 1 " + port + " " + config.Hostname),
+								// priority: the priority of the target host, lower value means more preferred
+								// weight: A relative weight for records with the same priority, higher value means more preferred
+								// port: the TCP or UDP port on which the service is to be found
+								// target: the canonical hostname of the machine providing the service
+								Value: aws.String("1 1 " + port + " " + configuration.Hostname),
 							},
 						},
 						SetIdentifier: aws.String(dockerId),
-						TTL:           aws.Int64(0),
-						Weight:        aws.Int64(1),
+						// TTL=0 to avoid DNS caches
+						TTL:           aws.Int64(defaultTTL),
+						Weight:        aws.Int64(defaultWeight),
 					},
 				},
 			},
 			Comment: aws.String("Service Discovery Created Record"),
 		},
-		HostedZoneId: aws.String(config.HostedZoneId),
+		HostedZoneId: aws.String(configuration.HostedZoneId),
 	}
 	_, err := r53.ChangeResourceRecordSets(params)
-	testErrorNoFatal(err)
-	fmt.Println("Record " + serviceName + ".servicediscovery.internal created (1 1 " + port + " " + config.Hostname + ")")
+	logErrorNoFatal(err)
+	fmt.Println("Record " + serviceName + ".servicediscovery.internal created (1 1 " + port + " " + configuration.Hostname + ")")
 	return err
 }
 
 func deleteDNSRecord(serviceName string, dockerId string) error {
 	var err error
 	r53 := route53.New(session.New())
+	// This API Call looks for the Route53 DNS record for this service and docker ID to get the values to delete
 	paramsList := &route53.ListResourceRecordSetsInput{
-		HostedZoneId:          aws.String(config.HostedZoneId), // Required
+		HostedZoneId:          aws.String(configuration.HostedZoneId), // Required
 		MaxItems:              aws.String("10"),
 		StartRecordIdentifier: aws.String(dockerId),
 		StartRecordName:       aws.String(serviceName + ".servicediscovery.internal"),
 		StartRecordType:       aws.String(route53.RRTypeSrv),
 	}
 	resp, err := r53.ListResourceRecordSets(paramsList)
-	testErrorNoFatal(err)
+	logErrorNoFatal(err)
 	if err != nil {
 		return err
 	}
@@ -211,7 +225,8 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 	for _, rrset := range resp.ResourceRecordSets {
 		if *rrset.SetIdentifier == dockerId {
 			for _, rrecords := range rrset.ResourceRecords {
-				srvValue = *rrecords.Value
+				srvValue = aws.StringValue(rrecords.Value)
+				break
 			}
 		}
 	}
@@ -220,6 +235,7 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 		return nil
 	}
 
+	// This API call deletes the DNS record for the service for this docker ID
 	params := &route53.ChangeResourceRecordSetsInput{
 		ChangeBatch: &route53.ChangeBatch{
 			Changes: []*route53.Change{
@@ -234,16 +250,16 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 							},
 						},
 						SetIdentifier: aws.String(dockerId),
-						TTL:           aws.Int64(0),
-						Weight:        aws.Int64(1),
+						TTL:           aws.Int64(defaultTTL),
+						Weight:        aws.Int64(defaultWeight),
 					},
 				},
 			},
 		},
-		HostedZoneId: aws.String(config.HostedZoneId),
+		HostedZoneId: aws.String(configuration.HostedZoneId),
 	}
 	_, err = r53.ChangeResourceRecordSets(params)
-	testErrorNoFatal(err)
+	logErrorNoFatal(err)
 	fmt.Println("Record " + serviceName + ".servicediscovery.internal deleted ( " + srvValue + ")")
 	return err
 }
@@ -251,6 +267,10 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 var dockerClient *docker.Client
 
 func getNetworkPortAndServiceName(container *docker.Container, includePort bool) (string, string){
+	// One of the environment varialbles should be SERVICE_<port>_NAME = <name of the service>
+	// We look for this environment variable doing a split in the "=" and another one in the "_"
+	// So envEval = [SERVICE_<port>_NAME, <name>]
+	// nameEval = [SERVICE, <port>, NAME]
 	for _, env := range container.Config.Env {
 		envEval := strings.Split(env, "=")
 		nameEval := strings.Split(envEval[0], "_")
@@ -275,30 +295,31 @@ func getNetworkPortAndServiceName(container *docker.Container, includePort bool)
 
 func main() {
 	var err error
-	var sum time.Duration
+	var sum int
 	var zoneId string
 	for {
+		// We try to get the Hosted Zone Id using exponential backoff
 		zoneId, err = getDNSHostedZoneId()
 		if err == nil {
 			break
 		}
 		if sum > 8 {
-			testError(err)
+			logErrorAndFail(err)
 		}
-		time.Sleep(sum * time.Second)
+		time.Sleep(time.Duration(sum) * time.Second)
 		sum += 2
 	}
-	config.HostedZoneId = zoneId
+	configuration.HostedZoneId = zoneId
 	metadataClient := ec2metadata.New(session.New())
 	hostname, err := metadataClient.GetMetadata("/hostname")
-	config.Hostname = hostname
-	testError(err)
+	configuration.Hostname = hostname
+	logErrorAndFail(err)
 
 	endpoint := "unix:///var/run/docker.sock"
 	startFn := func(event *docker.APIEvents) error {
 		var err error
 		container, err := dockerClient.InspectContainer(event.ID)
-		testError(err)
+		logErrorAndFail(err)
 		port, service := getNetworkPortAndServiceName(container, true)
 		if port != "" && service != "" {
 			sum = 1
@@ -310,7 +331,7 @@ func main() {
 					log.Error("Error creating DNS record")
 					break
 				}
-				time.Sleep(sum * time.Second)
+				time.Sleep(time.Duration(sum) * time.Second)
 				sum += 2
 			}
 		}
@@ -321,7 +342,7 @@ func main() {
 	stopFn := func(event *docker.APIEvents) error {
 		var err error
 		container, err := dockerClient.InspectContainer(event.ID)
-		testError(err)
+		logErrorAndFail(err)
 		_, service := getNetworkPortAndServiceName(container, false)
 		if service != "" {
 			sum = 1
@@ -333,7 +354,7 @@ func main() {
 					log.Error("Error deleting DNS record")
 					break
 				}
-				time.Sleep(sum * time.Second)
+				time.Sleep(time.Duration(sum) * time.Second)
 				sum += 2
 			}
 		}
@@ -347,11 +368,11 @@ func main() {
 	stopHandler := &dockerHandler{
 		handlerFunc: stopFn,
 	}
-	handlers := map[string][]Handler{"start": []Handler{startHandler}, "die": []Handler{stopHandler}}
+	handlers := map[string][]handler{"start": []handler{startHandler}, "die": []handler{stopHandler}}
 
 	dockerClient, _ = docker.NewClient(endpoint)
 	router, err := dockerEventsRouter(5, 5, dockerClient, handlers)
-	testError(err)
+	logErrorAndFail(err)
 	defer router.stop()
 	router.start()
 	fmt.Println("Waiting events")

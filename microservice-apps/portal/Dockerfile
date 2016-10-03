@@ -1,4 +1,4 @@
-FROM golang
+FROM golang:1.6.3
 
 RUN go get github.com/gorilla/mux
 
