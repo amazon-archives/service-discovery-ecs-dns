@@ -23,28 +23,31 @@
     "Mappings" : {
         "AmazonLinuxAMI" : {
             "us-east-1" : {
-                "AMI" : "ami-3d55272a"
+                "AMI" : "ami-40286957"
+            },
+            "us-east-2" : {
+                "AMI" : "ami-abf2a9ce"
             },
             "us-west-1" : {
-                "AMI" : "ami-444d0224"
+                "AMI" : "ami-20fab440"
             },
             "us-west-2" : {
-                "AMI" : "ami-1ccd1f7c"
+                "AMI" : "ami-562cf236"
             },
             "eu-west-1" : {
-                "AMI" : "ami-b6760fc5"
+                "AMI" : "ami-175f1964"
             },
             "eu-central-1" : {
-                "AMI" : "ami-f562909a"
+                "AMI" : "ami-c55ea2aa"
             },
             "ap-northeast-1" : {
-                "AMI" : "ami-096cba68"
+                "AMI" : "ami-010ed160"
             },
             "ap-southeast-1" : {
-                "AMI" : "ami-7934ee1a"
+                "AMI" : "ami-438b2f20"
             },
             "ap-southeast-2" : {
-                "AMI" : "ami-22a49541"
+                "AMI" : "ami-862211e5"
             }
         },
         "VPCLayout" : {
