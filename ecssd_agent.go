@@ -8,6 +8,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	log "github.com/Sirupsen/logrus"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
@@ -22,6 +23,8 @@ import (
 const workerTimeout = 180 * time.Second
 const defaultTTL = 0
 const defaultWeight = 1
+
+var DNSName = "servicediscovery.local"
 
 type handler interface {
 	Handle(*docker.APIEvents) error
@@ -153,7 +156,7 @@ type ContainerInfo struct {
 func getDNSHostedZoneId() (string, error) {
 	r53 := route53.New(session.New())
 	params := &route53.ListHostedZonesByNameInput{
-		DNSName: aws.String("servicediscovery.internal"),
+		DNSName: aws.String(DNSName),
 	}
 
 	zones, err := r53.ListHostedZonesByName(params)
@@ -176,7 +179,7 @@ func createDNSRecord(serviceName string, dockerId string, port string) error {
 				{
 					Action: aws.String(route53.ChangeActionCreate),
 					ResourceRecordSet: &route53.ResourceRecordSet{
-						Name: aws.String(serviceName + ".servicediscovery.internal"),
+						Name: aws.String(serviceName + "." + DNSName),
 						// It creates a SRV record with the name of the service
 						Type: aws.String(route53.RRTypeSrv),
 						ResourceRecords: []*route53.ResourceRecord{
@@ -201,7 +204,7 @@ func createDNSRecord(serviceName string, dockerId string, port string) error {
 	}
 	_, err := r53.ChangeResourceRecordSets(params)
 	logErrorNoFatal(err)
-	fmt.Println("Record " + serviceName + ".servicediscovery.internal created (1 1 " + port + " " + configuration.Hostname + ")")
+	fmt.Println("Record " + serviceName + "." + DNSName + " created (1 1 " + port + " " + configuration.Hostname + ")")
 	return err
 }
 
@@ -213,7 +216,7 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 		HostedZoneId:          aws.String(configuration.HostedZoneId), // Required
 		MaxItems:              aws.String("10"),
 		StartRecordIdentifier: aws.String(dockerId),
-		StartRecordName:       aws.String(serviceName + ".servicediscovery.internal"),
+		StartRecordName:       aws.String(serviceName + "." + DNSName),
 		StartRecordType:       aws.String(route53.RRTypeSrv),
 	}
 	resp, err := r53.ListResourceRecordSets(paramsList)
@@ -242,7 +245,7 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 				{
 					Action: aws.String(route53.ChangeActionDelete),
 					ResourceRecordSet: &route53.ResourceRecordSet{
-						Name: aws.String(serviceName + ".servicediscovery.internal"),
+						Name: aws.String(serviceName + "." + DNSName),
 						Type: aws.String(route53.RRTypeSrv),
 						ResourceRecords: []*route53.ResourceRecord{
 							{
@@ -260,7 +263,7 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 	}
 	_, err = r53.ChangeResourceRecordSets(params)
 	logErrorNoFatal(err)
-	fmt.Println("Record " + serviceName + ".servicediscovery.internal deleted ( " + srvValue + ")")
+	fmt.Println("Record " + serviceName + "." + DNSName + " deleted ( " + srvValue + ")")
 	return err
 }
 
@@ -297,6 +300,9 @@ func main() {
 	var err error
 	var sum int
 	var zoneId string
+	if len(os.Args) > 1 {
+		DNSName = os.Args[1]
+	}
 	for {
 		// We try to get the Hosted Zone Id using exponential backoff
 		zoneId, err = getDNSHostedZoneId()
