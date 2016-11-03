@@ -118,6 +118,7 @@ type config struct {
 	Region       string
 	HostedZoneId string
 	Hostname     string
+	LocalIp      string
 }
 
 var configuration config
@@ -181,14 +182,14 @@ func createDNSRecord(serviceName string, dockerId string, port string) error {
 					ResourceRecordSet: &route53.ResourceRecordSet{
 						Name: aws.String(serviceName + "." + DNSName),
 						// It creates a SRV record with the name of the service
-						Type: aws.String(route53.RRTypeSrv),
+						Type: aws.String(route53.RRTypeA),
 						ResourceRecords: []*route53.ResourceRecord{
 							{
 								// priority: the priority of the target host, lower value means more preferred
 								// weight: A relative weight for records with the same priority, higher value means more preferred
 								// port: the TCP or UDP port on which the service is to be found
 								// target: the canonical hostname of the machine providing the service
-								Value: aws.String("1 1 " + port + " " + configuration.Hostname),
+								Value: aws.String(configuration.LocalIp),
 							},
 						},
 						SetIdentifier: aws.String(dockerId),
@@ -204,7 +205,7 @@ func createDNSRecord(serviceName string, dockerId string, port string) error {
 	}
 	_, err := r53.ChangeResourceRecordSets(params)
 	logErrorNoFatal(err)
-	fmt.Println("Record " + serviceName + "." + DNSName + " created (1 1 " + port + " " + configuration.Hostname + ")")
+		fmt.Println("Record " + serviceName + "." + DNSName + " created (" + configuration.LocalIp + ")")
 	return err
 }
 
@@ -217,23 +218,23 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 		MaxItems:              aws.String("10"),
 		StartRecordIdentifier: aws.String(dockerId),
 		StartRecordName:       aws.String(serviceName + "." + DNSName),
-		StartRecordType:       aws.String(route53.RRTypeSrv),
+		StartRecordType:       aws.String(route53.RRTypeA),
 	}
 	resp, err := r53.ListResourceRecordSets(paramsList)
 	logErrorNoFatal(err)
 	if err != nil {
 		return err
 	}
-	srvValue := ""
+	aValue := ""
 	for _, rrset := range resp.ResourceRecordSets {
 		if *rrset.SetIdentifier == dockerId {
 			for _, rrecords := range rrset.ResourceRecords {
-				srvValue = aws.StringValue(rrecords.Value)
+				aValue = aws.StringValue(rrecords.Value)
 				break
 			}
 		}
 	}
-	if srvValue == "" {
+	if aValue == "" {
 		log.Error("Route53 Record doesn't exist")
 		return nil
 	}
@@ -246,10 +247,10 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 					Action: aws.String(route53.ChangeActionDelete),
 					ResourceRecordSet: &route53.ResourceRecordSet{
 						Name: aws.String(serviceName + "." + DNSName),
-						Type: aws.String(route53.RRTypeSrv),
+						Type: aws.String(route53.RRTypeA),
 						ResourceRecords: []*route53.ResourceRecord{
 							{
-								Value: aws.String(srvValue),
+								Value: aws.String(aValue),
 							},
 						},
 						SetIdentifier: aws.String(dockerId),
@@ -263,7 +264,7 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 	}
 	_, err = r53.ChangeResourceRecordSets(params)
 	logErrorNoFatal(err)
-	fmt.Println("Record " + serviceName + "." + DNSName + " deleted ( " + srvValue + ")")
+	fmt.Println("Record " + serviceName + "." + DNSName + " deleted ( " + aValue + ")")
 	return err
 }
 
@@ -318,7 +319,9 @@ func main() {
 	configuration.HostedZoneId = zoneId
 	metadataClient := ec2metadata.New(session.New())
 	hostname, err := metadataClient.GetMetadata("/hostname")
+	localIp, err := metadataClient.GetMetadata("/local-ipv4")
 	configuration.Hostname = hostname
+	configuration.LocalIp = localIp
 	logErrorAndFail(err)
 
 	endpoint := "unix:///var/run/docker.sock"
