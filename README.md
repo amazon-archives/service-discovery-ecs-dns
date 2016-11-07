@@ -30,7 +30,7 @@ You should then schedule the Lambda funtion to run every 5 minutes.
 ## Usage
 Once the cluster is created, you can start launching tasks and services into the ECS Cluster. For each task you want to register as a MicroService, you should specify an Environment variable in the Task definition, the name of the variable should be SERVICE_\<port>_NAME, where \<port> is the port where your service is going to listen inside the container, and the value is the name of the microservice. You can define multiple services per container using different ports.
 
-You should publish the port of the container using the portMappings properties. When you publish the port I recommend you to not specify the containerPort and leave it to be assigned randomly, this way you could have multiple containers of the same service running in the same server.
+You should publish the port of the container using the portMappings properties. When you publish the port I recommend you to not specify the hostPort and leave it to be assigned randomly, this way you could have multiple containers of the same service running in the same server.
 
 When the service starts, and the container is launched in one of the servers, the ecssd agent registers a new DNS record automatically, with the name <serviceName>.servicediscovery.internal and the type SRV.
 
