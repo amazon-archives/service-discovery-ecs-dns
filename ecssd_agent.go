@@ -24,7 +24,7 @@ const workerTimeout = 180 * time.Second
 const defaultTTL = 0
 const defaultWeight = 1
 
-var DNSName = "servicediscovery.local"
+var DNSName = "servicediscovery.internal"
 
 type handler interface {
 	Handle(*docker.APIEvents) error
@@ -281,15 +281,16 @@ func getNetworkPortAndServiceName(container *docker.Container, includePort bool)
 			if _, err := strconv.Atoi(nameEval[1]); err == nil {
 				if includePort {
 					for srcPort, mapping := range container.NetworkSettings.Ports {
-						if strings.HasPrefix(string(srcPort), nameEval[1]) {
+						portEval := strings.Split(string(srcPort), "/")
+						if len(portEval) > 0 &&  portEval[0] == nameEval[1] {
 							if len(mapping) > 0 {
 								return mapping[0].HostPort, envEval[1]
 							}
-						}		
+						}
 					}
 				} else {
 					return "", envEval[1]
-				}	
+				}
 			}
 		}
 	}
