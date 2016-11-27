@@ -14,8 +14,11 @@ import (
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/route53"
+	"github.com/aws/aws-sdk-go/service/cloudwatchevents"
 	"github.com/fsouza/go-dockerclient"
 	"time"
+	"io/ioutil"
+	"net/http"
 	"strings"
 	"strconv"
 )
@@ -25,6 +28,8 @@ const defaultTTL = 0
 const defaultWeight = 1
 
 var DNSName = "servicediscovery.internal"
+
+
 
 type handler interface {
 	Handle(*docker.APIEvents) error
@@ -118,6 +123,7 @@ type config struct {
 	Region       string
 	HostedZoneId string
 	Hostname     string
+
 }
 
 var configuration config
@@ -297,6 +303,54 @@ func getNetworkPortAndServiceName(container *docker.Container, includePort bool)
 	return "", ""
 }
 
+func sendToCWEvents (region string, detail string, detailType string, resource string, source string) error {
+	
+	config := aws.NewConfig().WithRegion(region)
+	sess := session.New(config)
+	
+	svc := cloudwatchevents.New(sess)
+	params := &cloudwatchevents.PutEventsInput{
+	    Entries: []*cloudwatchevents.PutEventsRequestEntry{ 
+	        { 
+	            Detail:     aws.String(detail),
+	            DetailType: aws.String(detailType),
+	            Resources: []*string{
+	                aws.String(resource), 
+	            },
+	            Source: aws.String(source),
+	            Time:   aws.Time(time.Now()),
+	        },
+	    },
+	}
+	resp, err := svc.PutEvents(params)
+	log.Infof("Just called PutEvents with the following details: %#v", detail)
+	if err != nil {
+	    
+	    fmt.Println(err.Error())
+	    return err
+	}
+
+	fmt.Println(resp)
+	return err
+}
+
+func getTaskArn(dockerID string) string {
+	resp, err := http.Get("http://127.0.0.1:51678/v1/tasks")
+	if err != nil{
+		panic(err)
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	bodyStr := string(body)
+	idIndex := strings.Index(bodyStr, string(dockerID))
+	arnStartIndex := strings.LastIndex(bodyStr[:idIndex], "arn:aws:ecs:")
+	arnString := bodyStr[arnStartIndex:]
+	arnEndIndex := strings.Index(arnString, "\"")
+
+	return arnString[:arnEndIndex]
+
+}
+
 func main() {
 	var err error
 	var sum int
@@ -319,6 +373,8 @@ func main() {
 	configuration.HostedZoneId = zoneId
 	metadataClient := ec2metadata.New(session.New())
 	hostname, err := metadataClient.GetMetadata("/hostname")
+	region, err := metadataClient.Region()
+	configuration.Region = region
 	configuration.Hostname = hostname
 	logErrorAndFail(err)
 
@@ -342,6 +398,10 @@ func main() {
 				sum += 2
 			}
 		}
+
+		taskArn := getTaskArn(event.ID)
+		sendToCWEvents(configuration.Region,`{ "dockerId": "` + event.ID + `","TaskArn":"` + taskArn + `" }`, "Task Started", configuration.Hostname, "awslabs.ecs.container" )
+
 		fmt.Println("Docker " + event.ID + " started")
 		return nil
 	}
@@ -365,6 +425,10 @@ func main() {
 				sum += 2
 			}
 		}
+
+        taskArn := getTaskArn(event.ID)
+		sendToCWEvents(configuration.Region, `{ "dockerId": "` + event.ID + `","TaskArn":"` + taskArn + `" }`, "Task Stopped", configuration.Hostname, "awslabs.ecs.container" )
+
 		fmt.Println("Docker " + event.ID + " stopped")
 		return nil
 	}
