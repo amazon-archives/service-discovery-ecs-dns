@@ -76,7 +76,7 @@
                     },
                     {
                         "Key" : "Name",
-                        "Value" : "ECS refarch service discovery"
+                        "Value" : "ECS-SD"
                     }
                 ]
             }
@@ -269,6 +269,8 @@
                 "CidrIp" : "0.0.0.0/0"
             }
         },
+
+
         "LaunchConfig": {
             "Type": "AWS::AutoScaling::LaunchConfiguration",
             "Metadata" : {
@@ -276,12 +278,14 @@
                 "AWS::CloudFormation::Init" : {
                     "config" : {
                         "files" : {
+
                             "/etc/init/ecssd_agent.conf" : {
-                                "source"  : "https://raw.githubusercontent.com/awslabs/service-discovery-ecs-dns/1.0/ecssd_agent.conf",
+                                "source"  : "https://raw.githubusercontent.com/awslabs/service-discovery-ecs-dns/1.0/ecssd_agent_cw.conf",
                                 "mode"    : "000644",
                                 "owner"   : "root",
                                 "group"   : "root"
                             },
+
                             "/usr/local/bin/ecssd_agent": {
                                 "source"  : "https://github.com/awslabs/service-discovery-ecs-dns/releases/download/1.2/ecssd_agent",
                                 "mode"    : "000755",
@@ -308,10 +312,12 @@
                     "         --stack ", { "Ref" : "AWS::StackName" },
                     "         --resource LaunchConfig ",
                     "         --region ", { "Ref" : "AWS::Region" }, "\n",
+                        "service awslogs start \n",
                     "start ecssd_agent\n"
                 ]]}}
             }
         },
+    
         "ServerGroup": {
             "Type": "AWS::AutoScaling::AutoScalingGroup",
             "Properties": {
@@ -333,6 +339,7 @@
                 ]
             }
         },
+
         "InstanceRole": {
             "Type": "AWS::IAM::Role",
             "Properties": {
@@ -349,11 +356,13 @@
                 "ManagedPolicyArns": [
                     "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role",
                     "arn:aws:iam::aws:policy/AmazonRoute53FullAccess",
-                    "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser"
+                    "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser",
+                    "arn:aws:iam::aws:policy/CloudWatchEventsFullAccess"
                 ],
                 "Path": "/"
             }
         },
+
         "ECSRole": {
             "Type": "AWS::IAM::Role",
             "Properties": {
@@ -373,6 +382,29 @@
                 "Path": "/"
             }
         },
+
+        "LambdaRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version" : "2012-10-17",
+                    "Statement": [ {
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": [ "lambda.amazonaws.com" ]
+                        },
+                        "Action": [ "sts:AssumeRole" ]
+                    } ]
+                },
+
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/CloudWatchEventsFullAccess",
+                    "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+                ],
+                "Path": "/"
+            }
+        },
+
         "InstanceProfile": {
             "Type": "AWS::IAM::InstanceProfile",
             "Properties": {
@@ -415,6 +447,57 @@
                 "Timeout" : "7200"
             }
         },
+
+        "DockerIdLambda": {
+          "Type": "AWS::Lambda::Function",
+          "DependsOn" : "ECSRole",
+          "Properties": {
+            "FunctionName" : "TaskToDockerIdMapper",
+            "Handler": "index.lambda_handler",
+            "Role": { "Fn::GetAtt": ["LambdaRole", "Arn"] },
+
+            "Code": {
+                "ZipFile":  { "Fn::Join": ["\n", [
+                "import json",
+                "def lambda_handler(event, context):",
+                "   print(json.dumps(event, indent=2))"
+              ]]}
+
+            },  
+
+            "Runtime": "python2.7",
+            "Timeout": "25"
+          }
+        },
+
+        "EventRule": {
+          "Type": "AWS::Events::Rule",
+          "Properties": {
+            "Description": "ShowDockerIDWhenServiceStops",
+            "EventPattern": {
+                  "source": [
+                    "awslabs.ecs.container"
+                  ]
+            },
+
+            "State": "ENABLED",
+            "Targets": [{
+              "Arn": { "Fn::GetAtt": ["DockerIdLambda", "Arn"] },
+              "Id": "TargetFunctionV1"
+            }]
+          }
+        },
+
+        "PermissionForEventsToInvokeLambda": {
+          "Type": "AWS::Lambda::Permission",
+          "Properties": {
+            "FunctionName": { "Ref": "DockerIdLambda" },
+            "Action": "lambda:InvokeFunction",
+            "Principal": "events.amazonaws.com",
+            "SourceArn": { "Fn::GetAtt": ["EventRule", "Arn"] }
+          }
+        },
+
         "DockerBuilder": {
             "Type": "AWS::EC2::Instance",
             "DependsOn": [ "TimeRepository", "CalcRepository", "PortalRepository" ],

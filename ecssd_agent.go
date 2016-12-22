@@ -13,10 +13,13 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/route53"
 	"github.com/fsouza/go-dockerclient"
-	"os"
+	"github.com/aws/aws-sdk-go/service/cloudwatchevents"
+	"net/http"
+	"io/ioutil"
 	"strconv"
 	"strings"
 	"time"
+	"flag"
 )
 
 const workerTimeout = 180 * time.Second
@@ -113,10 +116,9 @@ func (th *dockerHandler) Handle(event *docker.APIEvents) error {
 }
 
 type config struct {
-	EcsCluster   string
-	Region       string
 	HostedZoneId string
 	Hostname     string
+	Region		 string
 }
 
 var configuration config
@@ -304,13 +306,57 @@ func getNetworkPortAndServiceName(container *docker.Container, includePort bool)
 	return svc
 }
 
+func sendToCWEvents (detail string, detailType string, resource string, source string) error {
+	config := aws.NewConfig().WithRegion(configuration.Region)
+	sess := session.New(config)
+	svc := cloudwatchevents.New(sess)
+	params := &cloudwatchevents.PutEventsInput{
+		Entries: []*cloudwatchevents.PutEventsRequestEntry{
+			{
+				Detail: aws.String(detail),
+				DetailType: aws.String(detailType),
+				Resources: []*string{
+					aws.String(resource),
+				},
+				Source: aws.String(source),
+				Time: aws.Time(time.Now()),
+			},
+		},
+	}
+	_, err := svc.PutEvents(params)
+	logErrorNoFatal(err)
+	return err
+}
+
+func getTaskArn(dockerID string) string {
+	resp, err := http.Get("http://127.0.0.1:51678/v1/tasks")
+	if err != nil {
+		logErrorAndFail(err)
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	bodyStr := string(body)
+	idIndex := strings.Index(bodyStr, string(dockerID))
+	arnStartIndex := strings.LastIndex(bodyStr[:idIndex], "arn:aws:ecs:")
+	arnString := bodyStr[arnStartIndex:]
+	arnEndIndex := strings.Index(arnString, "\"")
+	return arnString[:arnEndIndex]
+}
+
 func main() {
 	var err error
 	var sum int
 	var zoneId string
-	if len(os.Args) > 1 {
-		DNSName = os.Args[1]
+
+	var sendEvents = flag.Bool("cw-send-events", false, "Send CloudWatch events when a container is created or terminated")
+	
+	flag.Parse()
+
+	var DNSNameArg = flag.Arg(0)
+	if DNSNameArg != "" {
+		DNSName = DNSNameArg
 	}
+
 	for {
 		// We try to get the Hosted Zone Id using exponential backoff
 		zoneId, err = getDNSHostedZoneId()
@@ -327,6 +373,9 @@ func main() {
 	metadataClient := ec2metadata.New(session.New())
 	hostname, err := metadataClient.GetMetadata("/hostname")
 	configuration.Hostname = hostname
+	logErrorAndFail(err)
+	region, err := metadataClient.Region()
+	configuration.Region = region
 	logErrorAndFail(err)
 
 	endpoint := "unix:///var/run/docker.sock"
@@ -350,6 +399,10 @@ func main() {
 					sum += 2
 				}
 			}
+		}
+		if *sendEvents {
+			taskArn := getTaskArn(event.ID)
+			sendToCWEvents(`{ "dockerId": "` + event.ID + `","TaskArn":"` + taskArn + `" }`, "Task Started", configuration.Hostname, "awslabs.ecs.container" )
 		}
 		fmt.Println("Docker " + event.ID + " started")
 		return nil
@@ -375,6 +428,10 @@ func main() {
 					sum += 2
 				}
 			}
+		}
+		if *sendEvents {
+			taskArn := getTaskArn(event.ID)
+			sendToCWEvents(`{ "dockerId": "` + event.ID + `","TaskArn":"` + taskArn + `" }`, "Task Stopped", configuration.Hostname, "awslabs.ecs.container" )
 		}
 		fmt.Println("Docker " + event.ID + " stopped")
 		return nil
