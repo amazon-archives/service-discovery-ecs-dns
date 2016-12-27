@@ -1,0 +1,487 @@
+{
+    "AWSTemplateFormatVersion" : "2010-09-09",
+    "Description" : "ECS Environment with Service Discovery",
+    "Metadata" : {
+        "AWS::CloudFormation::Interface" : {
+            "ParameterGroups" : [
+                {
+                    "Label" : { "default" : "Network Configuration" },
+                    "Parameters" : [
+                        "VPC",
+                        "FrontendSubnet1",
+                        "FrontendSubnet2",
+                        "BackendSubnet1",
+                        "BackendSubnet2"
+                    ]                
+                },
+                {
+                    "Label" : { "default" : "ECS Configuration" },
+                    "Parameters" : [
+                        "KeyName",
+                        "ECSInstanceType",
+                        "ECSClusterInstanceCount"
+                    ]
+                }
+            ]
+        }
+    },
+    "Parameters" : {
+        "KeyName" : {
+            "Type" : "AWS::EC2::KeyPair::KeyName",
+            "Description" : "Name of an existing EC2 KeyPair"
+        },
+        "ECSInstanceType" : {
+            "Type" : "String",
+            "Description" : "ECS instance type",
+            "Default" : "t2.micro",
+            "AllowedValues" : [ "t2.micro", "t2.small", "t2.medium" ],
+            "ConstraintDescription" : "Must be t2.micro, t2.small, t2.medium"
+        },
+        "ECSClusterInstanceCount" : {
+            "Type" : "Number",
+            "Description" : "The number of EC2 instances in the ECS Cluster",
+            "Default" : "2",
+            "AllowedValues" : [ "2", "3", "4" ]
+        },
+        "VPC" : {
+            "Type" : "AWS::EC2::VPC::Id",
+            "Description" : "VPC for ECS"
+        },
+        "FrontendSubnet1" : {
+            "Type" : "AWS::EC2::Subnet::Id",
+            "Description" : "Subnet1 for ECS ELBs"
+        },
+        "FrontendSubnet2" : {
+            "Type" : "AWS::EC2::Subnet::Id",
+            "Description" : "Subnet2 for ECS ELBs"
+        },
+        "BackendSubnet1" : {
+            "Type" : "AWS::EC2::Subnet::Id",
+            "Description" : "Subnet1 for ECS EC2s"
+        },
+        "BackendSubnet2" : {
+            "Type" : "AWS::EC2::Subnet::Id",
+            "Description" : "Subnet2 for ECS EC2s"
+        }
+    },
+    "Mappings" : {
+        "AmazonECSAMI" : {
+            "us-east-1" : { "AMI" : "ami-6df8fe7a" },
+            "us-east-2" : { "AMI" : "ami-c6b5efa3" },
+            "us-west-1" : { "AMI" : "ami-1eda8d7e" },
+            "us-west-2" : { "AMI" : "ami-a2ca61c2" },
+            "eu-west-1" : { "AMI" : "ami-ba346ec9" },
+            "eu-west-2" : { "AMI" : "ami-42c5cf26" },
+            "eu-central-1" : { "AMI" : "ami-e012d48f" },
+            "ap-northeast-1" : { "AMI" : "ami-08f7956f" },
+            "ap-southeast-1" : { "AMI" : "ami-f4832f97" },
+            "ap-southeast-2" : { "AMI" : "ami-774b7314" },
+            "ca-central-1" : { "AMI" : "ami-be45f7da" }
+        }
+    },
+    "Resources" : {
+        "HostedZone": {
+            "Type": "AWS::Route53::HostedZone",
+            "Properties": {
+                "HostedZoneConfig": { "Comment": "Hosted Zone for ECS Service Discovery" },
+                "Name": "servicediscovery.internal",
+                "VPCs": [{
+                    "VPCId": { "Ref": "VPC" },
+                    "VPCRegion": {"Ref": "AWS::Region"}
+                }]
+            }
+        },
+        "ECSInstanceSecurityGroup" : {
+            "Type" : "AWS::EC2::SecurityGroup",
+            "Properties" : {
+                "GroupDescription" : "Security Group for ECSInstance",
+                "VpcId" : {
+                    "Ref" : "VPC"
+                },
+                "Tags" : [
+                    {
+                        "Key" : "Name",
+                        "Value" : "ECSInstanceSecurityGroup"
+                    }
+                ]
+            }
+        },
+        "ECSInstanceSecurityGroupApps" : {
+            "Type" : "AWS::EC2::SecurityGroupIngress",
+            "DependsOn" : "ECSInstanceSecurityGroup",
+            "Properties" : {
+                "GroupId" : { "Ref" : "ECSInstanceSecurityGroup" },
+                "IpProtocol" : "tcp",
+                "FromPort" : 0,
+                "ToPort" : 65535,
+                "SourceSecurityGroupId" : { "Ref" : "ECSInstanceSecurityGroup" }
+            }
+        },
+        "ECSInstanceSecurityGroupAppsSSH" : {
+            "Type" : "AWS::EC2::SecurityGroupIngress",
+            "DependsOn" : "ECSInstanceSecurityGroup",
+            "Properties" : {
+                "GroupId" : { "Ref" : "ECSInstanceSecurityGroup" },
+                "IpProtocol" : "tcp",
+                "FromPort" : 22,
+                "ToPort" : 22,
+                "CidrIp" : "0.0.0.0/0"
+            }
+        },
+        "ECSInstanceSecurityGroupAppsWeb" : {
+            "Type" : "AWS::EC2::SecurityGroupIngress",
+            "DependsOn" : "ECSInstanceSecurityGroup",
+            "Properties" : {
+                "GroupId" : { "Ref" : "ECSInstanceSecurityGroup" },
+                "IpProtocol" : "tcp",
+                "FromPort" : 80,
+                "ToPort" : 80,
+                "CidrIp" : "0.0.0.0/0"
+            }
+        },
+        "LaunchConfig": {
+            "Type": "AWS::AutoScaling::LaunchConfiguration",
+            "Metadata" : {
+                "Comment" : "Install a simple application",
+                "AWS::CloudFormation::Init" : {
+                    "config" : {
+                        "files" : {
+                            "/etc/init/ecssd_agent.conf" : {
+                                "source"  : "https://raw.githubusercontent.com/awslabs/service-discovery-ecs-dns/1.1/ecssd_agent.conf",
+                                "mode"    : "000644",
+                                "owner"   : "root",
+                                "group"   : "root"
+                            },
+                            "/usr/local/bin/ecssd_agent": {
+                                "source"  : "https://github.com/awslabs/service-discovery-ecs-dns/releases/download/1.1/ecssd_agent",
+                                "mode"    : "000755",
+                                "owner"   : "root",
+                                "group"   : "root"
+                            }
+                        }
+                    }
+                }
+            },
+            "Properties": {
+                "KeyName": { "Ref": "KeyName" },
+                "ImageId": { "Fn::FindInMap" : [ "AmazonECSAMI", { "Ref" : "AWS::Region" }, "AMI" ] },
+                "SecurityGroups": [ { "Ref": "ECSInstanceSecurityGroup" } ],
+                "InstanceType": { "Ref": "ECSInstanceType" },
+                "AssociatePublicIpAddress" : "false",
+                "IamInstanceProfile": { "Fn::GetAtt" : ["InstanceProfile", "Arn"] },
+                "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+                    "#!/bin/bash\n",
+                    "echo ECS_CLUSTER=", {"Ref": "ECSCluster"}, " >> /etc/ecs/ecs.config\n",
+                    "yum install -y aws-cfn-bootstrap\n",
+                    "yum update -y aws-cfn-bootstrap\n",
+                    "/opt/aws/bin/cfn-init -v ",
+                    "         --stack ", { "Ref" : "AWS::StackName" },
+                    "         --resource LaunchConfig ",
+                    "         --region ", { "Ref" : "AWS::Region" }, "\n",
+                    "start ecssd_agent\n"
+                ]]}}
+            }
+        },
+        "ServerGroup": {
+            "Type": "AWS::AutoScaling::AutoScalingGroup",
+            "Properties": {
+                "VPCZoneIdentifier" : [
+                    { "Ref" : "BackendSubnet1" },
+                    { "Ref" : "BackendSubnet2" }
+                ],
+                "LaunchConfigurationName": { "Ref": "LaunchConfig" },
+                "MinSize": {"Ref": "ECSClusterInstanceCount"},
+                "MaxSize": {"Ref": "ECSClusterInstanceCount"},
+                "DesiredCapacity": {"Ref": "ECSClusterInstanceCount"},
+                "Tags" : [
+                    { "Key" : "Name", "Value" : { "Ref" : "AWS::StackName" }, "PropagateAtLaunch" : "true" }
+                ]
+            }
+        },
+        "InstanceRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version" : "2012-10-17",
+                    "Statement": [ {
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": [ "ec2.amazonaws.com" ]
+                        },
+                        "Action": [ "sts:AssumeRole" ]
+                    } ]
+                },
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role",
+                    "arn:aws:iam::aws:policy/AmazonRoute53FullAccess",
+                    "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser"
+                ],
+                "Path": "/"
+            }
+        },
+        "ECSRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version" : "2012-10-17",
+                    "Statement": [ {
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": [ "ecs.amazonaws.com" ]
+                        },
+                        "Action": [ "sts:AssumeRole" ]
+                    } ]
+                },
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceRole"
+                ],
+                "Path": "/"
+            }
+        },
+        "InstanceProfile": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Path": "/",
+                "Roles": [ {
+                    "Ref": "InstanceRole"
+                } ]
+            }
+        },
+        "ECSCluster": {
+            "Type": "AWS::ECS::Cluster",
+            "DependsOn" : "HostedZone"
+        },
+        "TimeRepository": {
+            "Type" : "AWS::ECR::Repository",
+            "Properties" : {
+                "RepositoryName" : "time-demo-service"
+            }
+        },
+        "CalcRepository": {
+            "Type" : "AWS::ECR::Repository",
+            "Properties" : {
+                "RepositoryName" : "calc-demo-service"
+            }
+        },
+        "PortalRepository": {
+            "Type" : "AWS::ECR::Repository",
+            "Properties" : {
+                "RepositoryName" : "portal-demo-service"
+            }
+        },
+        "DockerBuildWaitHandle" : {
+            "Type" : "AWS::CloudFormation::WaitConditionHandle"
+        },
+        "DockerBuildWaitCondition" : {
+            "Type" : "AWS::CloudFormation::WaitCondition",
+            "DependsOn" : "DockerBuilder",
+            "Properties" : {
+                "Handle" : { "Ref" : "DockerBuildWaitHandle" },
+                "Timeout" : "7200"
+            }
+        },
+        "DockerBuilder": {
+            "Type": "AWS::EC2::Instance",
+            "DependsOn": [ "TimeRepository", "CalcRepository", "PortalRepository" ],
+            "Properties": {
+                "KeyName": { "Ref": "KeyName" },
+                "ImageId": { "Fn::FindInMap" : [ "AmazonECSAMI", { "Ref" : "AWS::Region" }, "AMI" ] },
+                "InstanceType": { "Ref": "ECSInstanceType" },
+                "IamInstanceProfile": { "Ref" : "InstanceProfile" },
+                "NetworkInterfaces": [ {
+                    "AssociatePublicIpAddress": "true",
+                    "DeviceIndex": "0",
+                    "GroupSet": [{ "Ref" : "ECSInstanceSecurityGroup" }],
+                    "SubnetId": { "Ref" : "FrontendSubnet1" }
+                } ],
+                "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+                    "#!/bin/bash\n",
+                    "yum install -y aws-cfn-bootstrap\n",
+                    "yum update -y aws-cfn-bootstrap\n",
+                    "yum install -y git aws-cli\n",
+                    "git clone https://github.com/awslabs/service-discovery-ecs-dns.git\n",
+                    "$(aws ecr get-login --region ", { "Ref": "AWS::Region" }, ")\n",
+                    "docker build -t ", { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/time-demo-service service-discovery-ecs-dns/microservice-apps/time\n",
+                    "docker build -t ", { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/calc-demo-service service-discovery-ecs-dns/microservice-apps/calc\n",
+                    "docker build -t ", { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/portal-demo-service service-discovery-ecs-dns/microservice-apps/portal\n",
+                    "docker push ", { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/time-demo-service\n",
+                    "docker push ", { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/calc-demo-service\n",
+                    "docker push ", { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/portal-demo-service\n",
+                    "/opt/aws/bin/cfn-signal -e 0 -r \"Build Process Complete\" '", { "Ref" : "DockerBuildWaitHandle" }, "'\n"
+                ]]}},
+                "Tags" : [
+                    { "Key" : "Name", "Value" : { "Ref" : "AWS::StackName" } }
+                ]
+            }
+        },
+        "TimeDefinition": {
+            "Type" : "AWS::ECS::TaskDefinition",
+            "DependsOn": "DockerBuildWaitCondition",
+            "Properties" : {
+                "ContainerDefinitions": [
+                    {
+                        "Name": "time-service",
+                        "Image": { "Fn::Join" : ["", [
+                            { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/time-demo-service:latest"
+                        ]]},
+                        "Cpu": "100",
+                        "Memory": "100",
+                        "PortMappings": [
+                            {
+                                "ContainerPort": 8081
+                            }
+                        ],
+                        "Essential": true,
+                        "Environment": [
+                            {
+                                "Name": "TIME_USERNAME",
+                                "Value": "admin"
+                            },
+                            {
+                                "Name": "TIME_PASSWORD",
+                                "Value": "password"
+                            },
+                            {
+                                "Name": "SERVICE_8081_NAME",
+                                "Value": "time"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        "TimeService": {
+            "Type" : "AWS::ECS::Service",
+            "Properties": {
+                "Cluster": {"Ref": "ECSCluster"},
+                "DesiredCount": 2,
+                "TaskDefinition": {"Ref": "TimeDefinition"}
+            }
+        },
+        "CalcDefinition": {
+            "Type" : "AWS::ECS::TaskDefinition",
+            "DependsOn": "DockerBuildWaitCondition",
+            "Properties" : {
+                "ContainerDefinitions": [
+                    {
+                        "Name": "calc-service",
+                        "Image": { "Fn::Join" : ["", [
+                            { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/calc-demo-service:latest"
+                        ]]},
+                        "Cpu": "100",
+                        "Memory": "100",
+                        "PortMappings": [
+                            {
+                                "ContainerPort": 8081
+                            }
+                        ],
+                        "Essential": true,
+                        "Environment": [
+                            {
+                                "Name": "CALC_USERNAME",
+                                "Value": "admin"
+                            },
+                            {
+                                "Name": "CALC_PASSWORD",
+                                "Value": "password"
+                            },
+                            {
+                                "Name": "SERVICE_8081_NAME",
+                                "Value": "calc"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        "CalcService": {
+            "Type" : "AWS::ECS::Service",
+            "Properties": {
+                "Cluster": {"Ref": "ECSCluster"},
+                "DesiredCount": 2,
+                "TaskDefinition": {"Ref": "CalcDefinition"}
+            }
+        },
+        "PortalDefinition": {
+            "Type" : "AWS::ECS::TaskDefinition",
+            "DependsOn": "DockerBuildWaitCondition",
+            "Properties" : {
+                "ContainerDefinitions": [
+                    {
+                        "Name": "portal-service",
+                        "Image": { "Fn::Join" : ["", [
+                            { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/portal-demo-service:latest"
+                        ]]},
+                        "Cpu": "200",
+                        "Memory": "200",
+                        "PortMappings": [
+                            {
+                                "ContainerPort": 8080,
+                                "HostPort": 80
+                            }
+                        ],
+                        "Essential": true,
+                        "Environment": [
+                            {
+                                "Name": "CALC_USERNAME",
+                                "Value": "admin"
+                            },
+                            {
+                                "Name": "CALC_PASSWORD",
+                                "Value": "password"
+                            },
+                            {
+                                "Name": "TIME_USERNAME",
+                                "Value": "admin"
+                            },
+                            {
+                                "Name": "TIME_PASSWORD",
+                                "Value": "password"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        "PortalELB" : {
+            "Type" : "AWS::ElasticLoadBalancing::LoadBalancer",
+            "Properties" : {
+                "Subnets" : [{ "Ref" : "FrontendSubnet1" }, { "Ref" : "FrontendSubnet2" }],
+                "Listeners" : [ {
+                    "LoadBalancerPort" : "80",
+                    "InstancePort" : "80",
+                    "Protocol" : "HTTP"
+                } ],
+                "HealthCheck" : {
+                    "Target" : "HTTP:80/",
+                    "HealthyThreshold" : "3",
+                    "UnhealthyThreshold" : "5",
+                    "Interval" : "30",
+                    "Timeout" : "5"
+                },
+                "SecurityGroups": [{ "Ref": "ECSInstanceSecurityGroup" }]
+            }
+        },
+        "PortalService": {
+            "Type" : "AWS::ECS::Service",
+            "Properties": {
+                "Cluster": {"Ref": "ECSCluster"},
+                "DesiredCount": 1,
+                "LoadBalancers": [{
+                    "ContainerName": "portal-service",
+                    "ContainerPort" : 8080,
+                    "LoadBalancerName" : {"Ref": "PortalELB"}
+                }],
+                "TaskDefinition": {"Ref": "PortalDefinition"},
+                "Role": {"Ref": "ECSRole"}
+            },
+            "DependsOn" : "ECSRole"
+        }
+    },
+    "Outputs": {
+        "PortalURL": {
+            "Description" : "Portal URL",
+            "Value" : { "Fn::Join" : ["", ["http://", { "Fn::GetAtt" : [ "PortalELB", "DNSName" ]}, "/" ]]}
+        }
+    }
+}
