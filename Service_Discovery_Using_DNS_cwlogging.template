@@ -280,7 +280,7 @@
                         "files" : {
 
                             "/etc/init/ecssd_agent.conf" : {
-                                "source"  : "https://raw.githubusercontent.com/awslabs/service-discovery-ecs-dns/1.0/ecssd_agent_cw.conf",
+                                "source"  : "https://raw.githubusercontent.com/awslabs/service-discovery-ecs-dns/1.2/ecssd_agent_cw.conf",
                                 "mode"    : "000644",
                                 "owner"   : "root",
                                 "group"   : "root"
