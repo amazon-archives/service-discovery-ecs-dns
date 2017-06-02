@@ -15,7 +15,7 @@ import socket
 ###### Configuration
 
 ecs_clusters = []
-check_health = True
+check_health_active = True
 check_health_path = '/health'
 
 ####################
@@ -89,7 +89,7 @@ def process_records(response, ecs_data):
                         print("Record %s deleted" % rr)
                         break
                         
-                    if check_health:
+                    if check_health_active:
                         result = "Initial"
                         retries = 3
                         while retries > 0 and result != None:
