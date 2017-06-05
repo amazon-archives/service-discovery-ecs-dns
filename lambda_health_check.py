@@ -15,7 +15,7 @@ import socket
 ###### Configuration
 
 ecs_clusters = []
-check_health = True
+check_health_active = True
 check_health_path = '/health'
 
 ####################
@@ -89,7 +89,7 @@ def process_records(response, ecs_data):
                         print("Record %s deleted" % rr)
                         break
                         
-                    if check_health:
+                    if check_health_active:
                         result = "Initial"
                         retries = 3
                         while retries > 0 and result != None:
@@ -120,14 +120,19 @@ def process_records(response, ecs_data):
                 StartRecordName=response['NextRecordName'],
                 StartRecordType=response['NextRecordType'])
         process_records(new_response)
-    
-def search_container_port(task, port):
-    for container in task['containers']:
-        for network in container['networkBindings']:
-            if str(network['containerPort']) == port:
-                return str(network['hostPort'])
 
-    return "0"
+def get_definition_for_container(name, containerDefinitions):
+    for containerDefinition in containerDefinitions:
+        if containerDefinition['name'] == name:
+            return containerDefinition
+
+def get_service_for_port(port, environment):
+    for env in environment:
+        name_eval = env['name'].split("_")
+        if len(name_eval) == 3 and name_eval[0] == "SERVICE" and name_eval[1] == str(port) and name_eval[2] == "NAME":
+            return env['value']
+
+    return ""
 
 def get_ecs_data():
     for cluster_name in ecs_clusters:
@@ -156,12 +161,13 @@ def get_ecs_data():
             for task in responseTasks['tasks']:
                 list_tasks[task['taskArn']] = {'instance': task['containerInstanceArn'], 'containers': []}
                 responseDefinition = ecs.describe_task_definition(taskDefinition=task['taskDefinitionArn'])
-                for container in responseDefinition['taskDefinition']['containerDefinitions']:
-                    for env in container['environment']:
-                        name_eval = env['name'].split("_")
-                        if len(name_eval) == 3 and name_eval[0] == "SERVICE"  and name_eval[2] == "NAME":
-                            list_tasks[task['taskArn']]['containers'].append({'service': env['value'], 'port': search_container_port(task,name_eval[1])})
-                    
+                for container in task['containers']:
+                    containerDefinition = get_definition_for_container(container['name'], responseDefinition['taskDefinition']['containerDefinitions'])
+                    for networkBinding in container['networkBindings']:
+                        service = get_service_for_port(networkBinding['containerPort'], containerDefinition['environment'])
+                        if service != "":
+                            list_tasks[task['taskArn']]['containers'].append({'service': service, 'port': str(networkBinding['hostPort'])})
+
         return {'instanceArns': list_instance_arns, 'ec2Instances': list_ec2_instances, 'tasks': list_tasks}
         
 def lambda_handler(event, context):
