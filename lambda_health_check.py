@@ -119,7 +119,7 @@ def process_records(response, ecs_data):
                 HostedZoneId=hostedZoneId,
                 StartRecordName=response['NextRecordName'],
                 StartRecordType=response['NextRecordType'])
-        process_records(new_response)
+        process_records(new_response, ecs_data)
 
 def get_definition_for_container(name, containerDefinitions):
     for containerDefinition in containerDefinitions:
