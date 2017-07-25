@@ -83,7 +83,7 @@ def process_records(response, ecs_data):
             for rr in record['ResourceRecords']:
                 [ip, port] = get_ip_port(rr)
                 if ip != None:
-                    task=search_ecs_task(ip, port, record['Name'].split('.')[0], ecs_data)
+                    task=search_ecs_task(ip, port, '.'.join(record['Name'].split('.')[0:2]), ecs_data)
                     if task == None:
                         delete_route53_record(record)
                         print("Record %s deleted" % rr)
