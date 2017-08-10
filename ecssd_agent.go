@@ -7,7 +7,7 @@ package main
 
 import (
 	"fmt"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -349,6 +349,7 @@ func main() {
 	var zoneId string
 
 	var sendEvents = flag.Bool("cw-send-events", false, "Send CloudWatch events when a container is created or terminated")
+	var hostnameOverride = flag.String("hostname", "", "to use for registering the SRV records")
 	
 	flag.Parse()
 
@@ -369,11 +370,23 @@ func main() {
 		time.Sleep(time.Duration(sum) * time.Second)
 		sum += 2
 	}
+
 	configuration.HostedZoneId = zoneId
 	metadataClient := ec2metadata.New(session.New())
-	hostname, err := metadataClient.GetMetadata("/hostname")
-	configuration.Hostname = hostname
-	logErrorAndFail(err)
+
+        if *hostnameOverride == "" {
+		hostname, err := metadataClient.GetMetadata("/hostname")
+		logErrorAndFail(err)
+
+		name := strings.Split(strings.TrimSpace(hostname), " ")
+		if len(name) > 1 {
+			log.Errorf("metadata returned '%s' as hostname which contains spaces. using first '%s'", hostname, name[0])
+		}
+		configuration.Hostname = name[0]
+	} else {
+		configuration.Hostname = *hostnameOverride
+	}
+
 	region, err := metadataClient.Region()
 	configuration.Region = region
 	logErrorAndFail(err)
