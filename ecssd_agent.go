@@ -278,8 +278,7 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 		},
 		HostedZoneId: aws.String(configuration.HostedZoneId),
 	}
-	changeResponse, err := r53.ChangeResourceRecordSets(params)
-	log.Printf("%v\n", changeResponse)
+	_, err = r53.ChangeResourceRecordSets(params)
 	logErrorNoFatal(err)
 	fmt.Println("Record " + srvRecordName + " deleted ( " + srvValue + ")")
 	return err
