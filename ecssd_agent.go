@@ -176,6 +176,43 @@ func getDNSHostedZoneId() (string, error) {
 	return "", err
 }
 
+func createARecord(hostName string, localIP string) error {
+	r53 := route53.New(session.New())
+	aRecordName := configuration.Hostname
+	// This API call creates a new DNS record for this service
+	params := &route53.ChangeResourceRecordSetsInput{
+		ChangeBatch: &route53.ChangeBatch{
+			Changes: []*route53.Change{
+				{
+					Action: aws.String(route53.ChangeActionCreate),
+					ResourceRecordSet: &route53.ResourceRecordSet{
+						Name: aws.String(aRecordName),
+						// It creates an A record with the IP of the host running the agent
+						Type: aws.String(route53.RRTypeA,
+						ResourceRecords: []*route53.ResourceRecord{
+							{
+								// priority: the priority of the target host, lower value means more preferred
+								// weight: A relative weight for records with the same priority, higher value means more preferred
+								// port: the TCP or UDP port on which the service is to be found
+								// target: the canonical hostname of the machine providing the service
+								Value: aws.String(localIP),
+							},
+						},
+						// TTL=0 to avoid DNS caches
+						TTL:    aws.Int64(defaultTTL),
+					},
+				},
+			},
+			Comment: aws.String("Host A Record Created"),
+		},
+		HostedZoneId: aws.String(configuration.HostedZoneId),
+	}
+	_, err := r53.ChangeResourceRecordSets(params)
+	logErrorNoFatal(err)
+	fmt.Println("Record " + configuration.Hostname + " created, resolves to  " + localIP)
+	return err
+}
+
 func createDNSRecord(serviceName string, dockerId string, port string) error {
 	r53 := route53.New(session.New())
 	srvRecordName := serviceName + "." + DNSName
@@ -347,6 +384,7 @@ func main() {
 	var err error
 	var sum int
 	var zoneId string
+	var localIP string
 
 	var sendEvents = flag.Bool("cw-send-events", false, "Send CloudWatch events when a container is created or terminated")
 	
@@ -373,10 +411,15 @@ func main() {
 	metadataClient := ec2metadata.New(session.New())
 	hostname, err := metadataClient.GetMetadata("/hostname")
 	configuration.Hostname = hostname
+	localIP = metadataClient.GetMetadata("/local-ipv4")
 	logErrorAndFail(err)
 	region, err := metadataClient.Region()
 	configuration.Region = region
 	logErrorAndFail(err)
+
+	if err = createARecord(hostName string, localIP string); err != nil {
+		log.Error("Error creating host A record")
+	}
 
 	endpoint := "unix:///var/run/docker.sock"
 	startFn := func(event *docker.APIEvents) error {
