@@ -188,7 +188,7 @@ func createARecord(hostName string, localIP string) error {
 					ResourceRecordSet: &route53.ResourceRecordSet{
 						Name: aws.String(aRecordName),
 						// It creates an A record with the IP of the host running the agent
-						Type: aws.String(route53.RRTypeA,
+						Type: aws.String(route53.RRTypeA),
 						ResourceRecords: []*route53.ResourceRecord{
 							{
 								// priority: the priority of the target host, lower value means more preferred
@@ -384,7 +384,6 @@ func main() {
 	var err error
 	var sum int
 	var zoneId string
-	var localIP string
 
 	var sendEvents = flag.Bool("cw-send-events", false, "Send CloudWatch events when a container is created or terminated")
 	
@@ -409,15 +408,14 @@ func main() {
 	}
 	configuration.HostedZoneId = zoneId
 	metadataClient := ec2metadata.New(session.New())
-	hostname, err := metadataClient.GetMetadata("/hostname")
-	configuration.Hostname = hostname
-	localIP = metadataClient.GetMetadata("/local-ipv4")
+	localIP, err := metadataClient.GetMetadata("/local-ipv4")
+	configuration.Hostname = "IP-" + strings.Replace(localIP, ".", "-", 3) + "." + DNSName
 	logErrorAndFail(err)
 	region, err := metadataClient.Region()
 	configuration.Region = region
 	logErrorAndFail(err)
 
-	if err = createARecord(hostName string, localIP string); err != nil {
+	if err = createARecord(configuration.Hostname, localIP); err != nil {
 		log.Error("Error creating host A record")
 	}
 
