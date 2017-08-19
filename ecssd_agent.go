@@ -409,7 +409,7 @@ func main() {
 	configuration.HostedZoneId = zoneId
 	metadataClient := ec2metadata.New(session.New())
 	localIP, err := metadataClient.GetMetadata("/local-ipv4")
-	configuration.Hostname = "IP-" + strings.Replace(localIP, ".", "-", 3) + "." + DNSName
+	configuration.Hostname = "ip-" + strings.Replace(localIP, ".", "-", 3) + "." + DNSName
 	logErrorAndFail(err)
 	region, err := metadataClient.Region()
 	configuration.Region = region
