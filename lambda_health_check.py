@@ -17,6 +17,7 @@ import socket
 ecs_clusters = []
 check_health_active = True
 check_health_path = '/health'
+domain = 'servicediscovery.internal'
 
 ####################
 
@@ -25,7 +26,7 @@ print('Loading function')
 route53 = boto3.client('route53')
 ecs = boto3.client('ecs')
 ec2 = boto3.client('ec2')
-response = route53.list_hosted_zones_by_name(DNSName='servicediscovery.internal')
+response = route53.list_hosted_zones_by_name(DNSName=domain)
 if len(response['HostedZones']) == 0:
     raise Exception('Zone not found')
 hostedZoneId = response['HostedZones'][0]['Id']
@@ -36,7 +37,7 @@ def get_ip_port(rr):
         return [ip, rr['Value'].split(' ')[2]]
     except:
         return [None, None] 
-    
+
 def check_health(ip, port):
     try:
         conn = httplib.HTTPConnection(ip, int(port), timeout=2)
@@ -64,11 +65,11 @@ def search_ecs_task(ip, port, service, ecs_data):
         if task != None:
             return task
     
-def delete_route53_record(record):
+def delete_route53_record(record, comment):
     route53.change_resource_record_sets(
         HostedZoneId=hostedZoneId,
         ChangeBatch={
-            'Comment': 'Service Discovery Health Check failed',
+            'Comment': comment,
             'Changes': [
                 {
                     'Action': 'DELETE',
@@ -85,7 +86,7 @@ def process_records(response, ecs_data):
                 if ip != None:
                     task=search_ecs_task(ip, port, record['Name'].split('.')[0], ecs_data)
                     if task == None:
-                        delete_route53_record(record)
+                        delete_route53_record(record, 'Service Discovery Health Check failed')
                         print("Record %s deleted" % rr)
                         break
                         
@@ -96,7 +97,7 @@ def process_records(response, ecs_data):
                             result = check_health(ip, port)
                             retries -= 1
                         if result != None:
-                            delete_route53_record(record)
+                            delete_route53_record(record, 'Service Discovery Health Check failed')
                             print("Record %s deleted" % rr)
                             if task != None:
                                 ecs.stop_task(
@@ -105,7 +106,18 @@ def process_records(response, ecs_data):
                                     reason='Service Discovery Health Check failed'
                                 )
                                 print("Task %s stopped" % task)
-                    
+        
+        elif record['Type'] == 'A':
+            for rr in record['ResourceRecords']:
+                if ecs_data['clusterPrivateIPs'].count(rr['Value']) == 0:
+                    delete_route53_record(record, 'Instance no longer exists in cluster')
+                    print("Record %s deleted" % rr)
+                    break
+
+                elif ecs_data['clusterPrivateIPs'].count(rr['Value']) > 1:
+                    print("ERROR: IP %s exists on multiple cluster instances" % rr['Value'])
+                    break
+
     
     if response['IsTruncated']:
         if 'NextRecordIdentifier' in response.keys():
@@ -145,6 +157,7 @@ def get_ecs_data():
                 cluster=cluster_name,
                 containerInstances=list_instance_arns.keys())
             list_ec2_instances = {}
+            list_ecs_private_ips = []
             for instance in response['containerInstances']:
                 list_ec2_instances[instance['ec2InstanceId']] = {'instanceArn': instance['containerInstanceArn']}
                 list_instance_arns[instance['containerInstanceArn']]['instanceId'] = instance['ec2InstanceId']
@@ -153,7 +166,7 @@ def get_ecs_data():
                 for reservation in response['Reservations']:
                     for instance in reservation['Instances']:
                         list_ec2_instances[instance['InstanceId']]['privateIP'] = instance['PrivateIpAddress']
-        
+                        list_ecs_private_ips.append(instance['PrivateIpAddress'])
         response = ecs.list_tasks(cluster=cluster_name, desiredStatus='RUNNING')
         list_tasks = {}
         if len(response['taskArns']) > 0:
@@ -168,7 +181,7 @@ def get_ecs_data():
                         if service != "":
                             list_tasks[task['taskArn']]['containers'].append({'service': service, 'port': str(networkBinding['hostPort'])})
 
-        return {'instanceArns': list_instance_arns, 'ec2Instances': list_ec2_instances, 'tasks': list_tasks}
+        return {'instanceArns': list_instance_arns, 'ec2Instances': list_ec2_instances, 'tasks': list_tasks, 'clusterPrivateIPs': list_ecs_private_ips}
         
 def lambda_handler(event, context):
     #print('Starting')
