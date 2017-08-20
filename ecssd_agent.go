@@ -161,7 +161,11 @@ type ServiceInfo struct {
 }
 
 func getDNSHostedZoneId() (string, error) {
-	r53 := route53.New(session.New())
+	sess, err := session.NewSession()
+	if err != nil {
+		return "", err
+	}
+	r53 := route53.New(sess)
 	params := &route53.ListHostedZonesByNameInput{
 		DNSName: aws.String(DNSName),
 	}
@@ -178,7 +182,11 @@ func getDNSHostedZoneId() (string, error) {
 }
 
 func createDNSRecord(serviceName string, dockerId string, port string) error {
-	r53 := route53.New(session.New())
+	sess, err := session.NewSession()
+	if err != nil {
+		return err
+	}
+	r53 := route53.New(sess)
 	srvRecordName := serviceName + "." + DNSName
 	// This API call creates a new DNS record for this service
 	params := &route53.ChangeResourceRecordSetsInput{
@@ -210,15 +218,18 @@ func createDNSRecord(serviceName string, dockerId string, port string) error {
 		},
 		HostedZoneId: aws.String(configuration.HostedZoneId),
 	}
-	_, err := r53.ChangeResourceRecordSets(params)
+	_, err = r53.ChangeResourceRecordSets(params)
 	logErrorNoFatal(err)
 	fmt.Println("Record " + srvRecordName + " created (1 1 " + port + " " + configuration.Hostname + ")")
 	return err
 }
 
 func deleteDNSRecord(serviceName string, dockerId string) error {
-	var err error
-	r53 := route53.New(session.New())
+	sess, err := session.NewSession()
+	if err != nil {
+		return err
+	}
+	r53 := route53.New(sess)
 	srvRecordName := serviceName + "." + DNSName
 	// This API Call looks for the Route53 DNS record for this service and docker ID to get the values to delete
 	paramsList := &route53.ListResourceRecordSetsInput{
@@ -287,7 +298,7 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 var dockerClient *docker.Client
 
 func getNetworkPortAndServiceName(container *docker.Container, includePort bool) []ServiceInfo {
-	// One of the environment varialbles should be SERVICE_<port>_NAME = <name of the service>
+	// One of the environment variables should be SERVICE_<port>_NAME = <name of the service>
 	// We look for this environment variable doing a split in the "=" and another one in the "_"
 	// So envEval = [SERVICE_<port>_NAME, <name>]
 	// nameEval = [SERVICE, <port>, NAME]
