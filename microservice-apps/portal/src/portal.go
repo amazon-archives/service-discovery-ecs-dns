@@ -49,10 +49,10 @@ func TimeHandler(res http.ResponseWriter, req *http.Request) {
 	}
 	cli := &http.Client{}
 	response, err := cli.Do(req)
-	defer response.Body.Close()
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer response.Body.Close()
 
 	if response.StatusCode != 200 {
 		log.Printf("Got Error response: %s\n", response.Status)
@@ -94,10 +94,10 @@ func CalcHandler(res http.ResponseWriter, req *http.Request) {
 	}
 	cli := &http.Client{}
 	response, err := cli.Do(req)
-	defer response.Body.Close()
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer response.Body.Close()
 
 	if response.StatusCode != 200 {
 		log.Printf("Got Error response: %s\n", response.Status)

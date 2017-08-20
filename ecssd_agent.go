@@ -181,37 +181,42 @@ func getDNSHostedZoneId() (string, error) {
 	return "", err
 }
 
+func createSRVRecordSet(dockerId, port, serviceName string) *route53.ResourceRecordSet {
+	srvRecordName := serviceName + "." + DNSName
+
+	return &route53.ResourceRecordSet{
+		Name: aws.String(srvRecordName),
+		// It creates a SRV record with the name of the service
+		Type: aws.String(route53.RRTypeSrv),
+		ResourceRecords: []*route53.ResourceRecord{
+			{
+				// priority: the priority of the target host, lower value means more preferred
+				// weight: A relative weight for records with the same priority, higher value means more preferred
+				// port: the TCP or UDP port on which the service is to be found
+				// target: the canonical hostname of the machine providing the service
+				Value: aws.String("1 1 " + port + " " + configuration.Hostname),
+			},
+		},
+		SetIdentifier: aws.String(configuration.Hostname + ":" + dockerId),
+		// TTL=0 to avoid DNS caches
+		TTL:    aws.Int64(defaultTTL),
+		Weight: aws.Int64(defaultWeight),
+	}
+}
+
 func createDNSRecord(serviceName string, dockerId string, port string) error {
 	sess, err := session.NewSession()
 	if err != nil {
 		return err
 	}
 	r53 := route53.New(sess)
-	srvRecordName := serviceName + "." + DNSName
 	// This API call creates a new DNS record for this service
 	params := &route53.ChangeResourceRecordSetsInput{
 		ChangeBatch: &route53.ChangeBatch{
 			Changes: []*route53.Change{
 				{
-					Action: aws.String(route53.ChangeActionCreate),
-					ResourceRecordSet: &route53.ResourceRecordSet{
-						Name: aws.String(srvRecordName),
-						// It creates a SRV record with the name of the service
-						Type: aws.String(route53.RRTypeSrv),
-						ResourceRecords: []*route53.ResourceRecord{
-							{
-								// priority: the priority of the target host, lower value means more preferred
-								// weight: A relative weight for records with the same priority, higher value means more preferred
-								// port: the TCP or UDP port on which the service is to be found
-								// target: the canonical hostname of the machine providing the service
-								Value: aws.String("1 1 " + port + " " + configuration.Hostname),
-							},
-						},
-						SetIdentifier: aws.String(dockerId),
-						// TTL=0 to avoid DNS caches
-						TTL:    aws.Int64(defaultTTL),
-						Weight: aws.Int64(defaultWeight),
-					},
+					Action:            aws.String(route53.ChangeActionCreate),
+					ResourceRecordSet: createSRVRecordSet(dockerId, port, serviceName),
 				},
 			},
 			Comment: aws.String("Service Discovery Created Record"),
@@ -220,7 +225,7 @@ func createDNSRecord(serviceName string, dockerId string, port string) error {
 	}
 	_, err = r53.ChangeResourceRecordSets(params)
 	logErrorNoFatal(err)
-	fmt.Println("Record " + srvRecordName + " created (1 1 " + port + " " + configuration.Hostname + ")")
+	fmt.Println("Record " + *params.ChangeBatch.Changes[0].ResourceRecordSet.Name + " created (1 1 " + port + " " + configuration.Hostname + ")")
 	return err
 }
 
@@ -231,6 +236,7 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 	}
 	r53 := route53.New(sess)
 	srvRecordName := serviceName + "." + DNSName
+	srvSetIdentifier := configuration.Hostname + ":" + dockerId
 	// This API Call looks for the Route53 DNS record for this service and docker ID to get the values to delete
 	paramsList := &route53.ListResourceRecordSetsInput{
 		HostedZoneId:    aws.String(configuration.HostedZoneId), // Required
@@ -243,9 +249,9 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 	resp, err := r53.ListResourceRecordSets(paramsList)
 	for more && srvValue == "" && err == nil {
 		for _, rrset := range resp.ResourceRecordSets {
-			if rrset.SetIdentifier != nil && *rrset.SetIdentifier == dockerId && (*rrset.Name == srvRecordName || *rrset.Name == srvRecordName+".") {
-				for _, rrecords := range rrset.ResourceRecords {
-					srvValue = aws.StringValue(rrecords.Value)
+			if rrset.SetIdentifier != nil && *rrset.SetIdentifier == srvSetIdentifier && (*rrset.Name == srvRecordName || *rrset.Name == srvRecordName+".") {
+				for _, rrecord := range rrset.ResourceRecords {
+					srvValue = aws.StringValue(rrecord.Value)
 					break
 				}
 			}
@@ -280,7 +286,7 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 								Value: aws.String(srvValue),
 							},
 						},
-						SetIdentifier: aws.String(dockerId),
+						SetIdentifier: aws.String(configuration.Hostname + ":" + dockerId),
 						TTL:           aws.Int64(defaultTTL),
 						Weight:        aws.Int64(defaultWeight),
 					},
@@ -296,6 +302,116 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 }
 
 var dockerClient *docker.Client
+
+func isManagedResourceRecordSet(rrs *route53.ResourceRecordSet) bool {
+	return rrs != nil &&
+		rrs.Type != nil &&
+		*rrs.Type == route53.RRTypeSrv &&
+		rrs.SetIdentifier != nil &&
+		strings.HasPrefix(*rrs.SetIdentifier, configuration.Hostname)
+}
+
+// Synchronizes the service records of the hosted zone against the currently running docker instances.
+// SRV records associated with containers on this host which are no longer running, will be removed.
+// Missing SRV records from running containers are added.
+func syncDNSRecords() error {
+	containers, err := dockerClient.ListContainers(docker.ListContainersOptions{})
+	if err != nil {
+		return err
+	}
+
+	sess, err := session.NewSession()
+	if err != nil {
+		return err
+	}
+	r53 := route53.New(sess)
+
+	inZone := map[string]*route53.ResourceRecordSet{}
+
+	paramsList := &route53.ListResourceRecordSetsInput{
+		HostedZoneId: aws.String(configuration.HostedZoneId), // Required
+		MaxItems:     aws.String("100"),
+	}
+	more := true
+	resp, err := r53.ListResourceRecordSets(paramsList)
+	for more && err == nil {
+		for _, rrset := range resp.ResourceRecordSets {
+			if isManagedResourceRecordSet(rrset) {
+				inZone[*rrset.SetIdentifier] = rrset
+			}
+		}
+
+		more = resp.IsTruncated != nil && *resp.IsTruncated
+		if more {
+			paramsList.StartRecordIdentifier = resp.NextRecordIdentifier
+			resp, err = r53.ListResourceRecordSets(paramsList)
+		}
+	}
+
+	running := make(map[string]string, len(containers))
+	for _, container := range containers {
+		running[configuration.Hostname+":"+container.ID] = container.ID
+	}
+
+	toDelete := map[string]*route53.ResourceRecordSet{}
+	for k, v := range inZone {
+		if _, ok := running[k]; !ok {
+			toDelete[k] = v
+		}
+	}
+
+	toAdd := map[string]string{}
+	for k, v := range running {
+		if _, ok := inZone[k]; !ok {
+			toAdd[k] = v
+		}
+	}
+
+	if len(toDelete) > 0 || len(toAdd) > 0 {
+		log.Infof("Zone '%s' for host '%s' out of sync, adding %d and removing %d records",
+			DNSName, configuration.Hostname, len(toAdd), len(toDelete))
+	} else {
+		log.Infof("Zone '%s' for host '%s' in sync, %d records found for %d running containers",
+			DNSName, configuration.Hostname, len(inZone), len(running))
+		return nil
+	}
+
+	changes := make([]*route53.Change, len(toDelete)+len(toAdd))
+
+	for _, rrs := range toDelete {
+		log.Infof("Removing SRV record %s %s", *rrs.Name, *rrs.ResourceRecords[0].Value)
+		changes = append(changes, &route53.Change{
+			Action:            aws.String(route53.ChangeActionDelete),
+			ResourceRecordSet: rrs,
+		})
+	}
+
+	for _, id := range toAdd {
+		container, err := dockerClient.InspectContainer(id)
+		if err != nil {
+			continue
+		}
+		allService := getNetworkPortAndServiceName(container, true)
+		for _, svc := range allService {
+			if svc.Name != "" && svc.Port != "" {
+				rrs := createSRVRecordSet(id, svc.Port, svc.Name)
+				log.Infof("Adding SRV record %s %s", *rrs.Name, *rrs.ResourceRecords[0].Value)
+				changes = append(changes, &route53.Change{
+					Action:            aws.String(route53.ChangeActionUpsert),
+					ResourceRecordSet: rrs,
+				})
+			}
+		}
+	}
+
+	_, err = r53.ChangeResourceRecordSets(&route53.ChangeResourceRecordSetsInput{
+		ChangeBatch:  &route53.ChangeBatch{Changes: changes},
+		HostedZoneId: aws.String(configuration.HostedZoneId),
+	})
+	logErrorNoFatal(err)
+
+	return err
+}
 
 func getNetworkPortAndServiceName(container *docker.Container, includePort bool) []ServiceInfo {
 	// One of the environment variables should be SERVICE_<port>_NAME = <name of the service>
@@ -328,7 +444,10 @@ func getNetworkPortAndServiceName(container *docker.Container, includePort bool)
 
 func sendToCWEvents(detail string, detailType string, resource string, source string) error {
 	config := aws.NewConfig().WithRegion(configuration.Region)
-	sess := session.New(config)
+	sess, err := session.NewSession(config)
+	if err != nil {
+		return err
+	}
 	svc := cloudwatchevents.New(sess)
 	params := &cloudwatchevents.PutEventsInput{
 		Entries: []*cloudwatchevents.PutEventsRequestEntry{
@@ -343,7 +462,7 @@ func sendToCWEvents(detail string, detailType string, resource string, source st
 			},
 		},
 	}
-	_, err := svc.PutEvents(params)
+	_, err = svc.PutEvents(params)
 	logErrorNoFatal(err)
 	return err
 }
@@ -476,11 +595,15 @@ func main() {
 	stopHandler := &dockerHandler{
 		handlerFunc: stopFn,
 	}
-	handlers := map[string][]handler{"start": []handler{startHandler}, "die": []handler{stopHandler}}
+	handlers := map[string][]handler{"start": {startHandler}, "die": {stopHandler}}
 
 	dockerClient, _ = docker.NewClient(endpoint)
 	router, err := dockerEventsRouter(5, 5, dockerClient, handlers)
 	logErrorAndFail(err)
+
+	err = syncDNSRecords()
+	logErrorNoFatal(err)
+
 	defer router.stop()
 	router.start()
 	fmt.Println("Waiting events")
