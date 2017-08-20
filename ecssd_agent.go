@@ -14,13 +14,18 @@ import (
 	"strings"
 	"time"
 
+	"context"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cloudwatchevents"
 	"github.com/aws/aws-sdk-go/service/route53"
-	"github.com/fsouza/go-dockerclient"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/events"
+	"github.com/docker/docker/api/types/filters"
+	docker "github.com/docker/docker/client"
 	log "github.com/sirupsen/logrus"
+	"io"
 )
 
 const workerTimeout = 180 * time.Second
@@ -30,18 +35,20 @@ const defaultWeight = 1
 var DNSName = "servicediscovery.internal"
 
 type handler interface {
-	Handle(*docker.APIEvents) error
+	Handle(events.Message) error
 }
 
 type dockerRouter struct {
 	handlers      map[string][]handler
 	dockerClient  *docker.Client
-	listener      chan *docker.APIEvents
+	cancel        context.CancelFunc
+	events        <-chan events.Message
+	errors        <-chan error
 	workers       chan *worker
 	workerTimeout time.Duration
 }
 
-func dockerEventsRouter(bufferSize int, workerPoolSize int, dockerClient *docker.Client,
+func dockerEventsRouter(workerPoolSize int, dockerClient *docker.Client,
 	handlers map[string][]handler) (*dockerRouter, error) {
 	workers := make(chan *worker, workerPoolSize)
 	for i := 0; i < workerPoolSize; i++ {
@@ -51,7 +58,6 @@ func dockerEventsRouter(bufferSize int, workerPoolSize int, dockerClient *docker
 	dockerRouter := &dockerRouter{
 		handlers:      handlers,
 		dockerClient:  dockerClient,
-		listener:      make(chan *docker.APIEvents, bufferSize),
 		workers:       workers,
 		workerTimeout: workerTimeout,
 	}
@@ -59,46 +65,54 @@ func dockerEventsRouter(bufferSize int, workerPoolSize int, dockerClient *docker
 	return dockerRouter, nil
 }
 
-func (e *dockerRouter) start() error {
+func (e *dockerRouter) start() {
+	var ctx context.Context
+	ctx, e.cancel = context.WithCancel(context.Background())
+	filters := filters.NewArgs()
+	filters.Add("Type", events.ContainerEventType)
+	e.events, e.errors = e.dockerClient.Events(ctx, types.EventsOptions{Filters: filters})
 	go e.manageEvents()
-	return e.dockerClient.AddEventListener(e.listener)
 }
 
-func (e *dockerRouter) stop() error {
-	if e.listener == nil {
-		return nil
-	}
-	return e.dockerClient.RemoveEventListener(e.listener)
+func (e *dockerRouter) stop() {
+	e.cancel()
 }
 
 func (e *dockerRouter) manageEvents() {
 	for {
-		event := <-e.listener
-		timer := time.NewTimer(e.workerTimeout)
-		gotWorker := false
-		// Wait until we get a free worker or a timeout
-		// there is a limit in the number of concurrent events managed by workers to avoid resource exhaustion
-		// so we wait until we have a free worker or a timeout occurs
-		for !gotWorker {
-			select {
-			case w := <-e.workers:
-				if !timer.Stop() {
-					<-timer.C
-				}
-				go w.doWork(event, e)
-				gotWorker = true
-			case <-timer.C:
-				log.Infof("Timed out waiting.")
+		select {
+		case err := <-e.errors:
+			if err != nil && err != io.EOF {
+				logErrorAndFail(err)
 			}
+		case event := <-e.events:
+			timer := time.NewTimer(e.workerTimeout)
+			gotWorker := false
+			// Wait until we get a free worker or a timeout
+			// there is a limit in the number of concurrent events managed by workers to avoid resource exhaustion
+			// so we wait until we have a free worker or a timeout occurs
+			for !gotWorker {
+				select {
+				case w := <-e.workers:
+					if !timer.Stop() {
+						<-timer.C
+					}
+					go w.doWork(event, e)
+					gotWorker = true
+				case <-timer.C:
+					log.Infof("Timed out waiting.")
+				}
+			}
+
 		}
 	}
 }
 
 type worker struct{}
 
-func (w *worker) doWork(event *docker.APIEvents, e *dockerRouter) {
+func (w *worker) doWork(event events.Message, e *dockerRouter) {
 	defer func() { e.workers <- w }()
-	if handlers, ok := e.handlers[event.Status]; ok {
+	if handlers, ok := e.handlers[event.Action]; ok {
 		log.Infof("Processing event: %#v", event)
 		for _, handler := range handlers {
 			if err := handler.Handle(event); err != nil {
@@ -109,10 +123,10 @@ func (w *worker) doWork(event *docker.APIEvents, e *dockerRouter) {
 }
 
 type dockerHandler struct {
-	handlerFunc func(event *docker.APIEvents) error
+	handlerFunc func(event events.Message) error
 }
 
-func (th *dockerHandler) Handle(event *docker.APIEvents) error {
+func (th *dockerHandler) Handle(event events.Message) error {
 	return th.handlerFunc(event)
 }
 
@@ -315,7 +329,7 @@ func isManagedResourceRecordSet(rrs *route53.ResourceRecordSet) bool {
 // SRV records associated with containers on this host which are no longer running, will be removed.
 // Missing SRV records from running containers are added.
 func syncDNSRecords() error {
-	containers, err := dockerClient.ListContainers(docker.ListContainersOptions{})
+	containers, err := dockerClient.ContainerList(context.Background(), types.ContainerListOptions{})
 	if err != nil {
 		return err
 	}
@@ -387,7 +401,7 @@ func syncDNSRecords() error {
 	}
 
 	for _, id := range toAdd {
-		container, err := dockerClient.InspectContainer(id)
+		container, err := dockerClient.ContainerInspect(context.Background(), id)
 		if err != nil {
 			continue
 		}
@@ -413,7 +427,7 @@ func syncDNSRecords() error {
 	return err
 }
 
-func getNetworkPortAndServiceName(container *docker.Container, includePort bool) []ServiceInfo {
+func getNetworkPortAndServiceName(container types.ContainerJSON, includePort bool) []ServiceInfo {
 	// One of the environment variables should be SERVICE_<port>_NAME = <name of the service>
 	// We look for this environment variable doing a split in the "=" and another one in the "_"
 	// So envEval = [SERVICE_<port>_NAME, <name>]
@@ -530,10 +544,9 @@ func main() {
 	configuration.Region = region
 	logErrorAndFail(err)
 
-	endpoint := "unix:///var/run/docker.sock"
-	startFn := func(event *docker.APIEvents) error {
+	startFn := func(event events.Message) error {
 		var err error
-		container, err := dockerClient.InspectContainer(event.ID)
+		container, err := dockerClient.ContainerInspect(context.Background(), event.ID)
 		logErrorAndFail(err)
 		allService := getNetworkPortAndServiceName(container, true)
 		for _, svc := range allService {
@@ -560,9 +573,9 @@ func main() {
 		return nil
 	}
 
-	stopFn := func(event *docker.APIEvents) error {
+	stopFn := func(event events.Message) error {
 		var err error
-		container, err := dockerClient.InspectContainer(event.ID)
+		container, err := dockerClient.ContainerInspect(context.Background(), event.ID)
 		logErrorAndFail(err)
 		allService := getNetworkPortAndServiceName(container, false)
 		for _, svc := range allService {
@@ -597,8 +610,8 @@ func main() {
 	}
 	handlers := map[string][]handler{"start": {startHandler}, "die": {stopHandler}}
 
-	dockerClient, _ = docker.NewClient(endpoint)
-	router, err := dockerEventsRouter(5, 5, dockerClient, handlers)
+	dockerClient, _ = docker.NewEnvClient()
+	router, err := dockerEventsRouter(5, dockerClient, handlers)
 	logErrorAndFail(err)
 
 	err = syncDNSRecords()
