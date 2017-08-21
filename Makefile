@@ -1,4 +1,4 @@
-.PHONY: all vet
+.PHONY: all vet install
 
 PKGS=$(shell go list ./... | grep -Fv vendor)
 
@@ -15,6 +15,9 @@ all:
  		-ldflags "-linkmode external -extldflags -static" \
 		github.com/bankrs/service-discovery-ecs-dns
 	 docker build -t bankrs/ecssd_agent:latest .
+
+install:
+	@go install $(PKGS)
 
 vet:
 	@go vet $(PKGS)

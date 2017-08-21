@@ -9,11 +9,11 @@ buildsteps: &buildsteps
 
       - run:
           name: go vet
-          command: go vet ./... | tee ${TEST_RESULTS}/go-vet-${VERSION}.out
+          command: make vet | tee ${TEST_RESULTS}/go-vet-${VERSION}.out
 
       - run:
           name: go install
-          command: go install ./... | tee ${TEST_RESULTS}/go-install-${VERSION}.out
+          command: make install ./... | tee ${TEST_RESULTS}/go-install-${VERSION}.out
 
       - store_artifacts:
           path: /tmp/test-results
