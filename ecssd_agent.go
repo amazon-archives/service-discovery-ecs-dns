@@ -259,15 +259,12 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 		StartRecordType: aws.String(route53.RRTypeSrv),
 	}
 	more := true
-	srvValue := ""
+	var recordSetToDelete *route53.ResourceRecordSet
 	resp, err := r53.ListResourceRecordSets(paramsList)
-	for more && srvValue == "" && err == nil {
+	for more && recordSetToDelete == nil && err == nil {
 		for _, rrset := range resp.ResourceRecordSets {
-			if rrset.SetIdentifier != nil && *rrset.SetIdentifier == srvSetIdentifier && (*rrset.Name == srvRecordName || *rrset.Name == srvRecordName+".") {
-				for _, rrecord := range rrset.ResourceRecords {
-					srvValue = aws.StringValue(rrecord.Value)
-					break
-				}
+			if isManagedResourceRecordSet(rrset) && *rrset.SetIdentifier == srvSetIdentifier {
+				recordSetToDelete = rrset
 			}
 		}
 
@@ -281,29 +278,19 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 	if err != nil {
 		return err
 	}
-	if srvValue == "" {
-		log.Error("Route53 Record doesn't exist")
+	if recordSetToDelete == nil {
+		log.Error("Route53 record doesn't exist")
 		return nil
 	}
 
 	// This API call deletes the DNS record for the service for this docker ID
 	params := &route53.ChangeResourceRecordSetsInput{
 		ChangeBatch: &route53.ChangeBatch{
+			Comment: aws.String("Service Discovery Created Record"),
 			Changes: []*route53.Change{
 				{
-					Action: aws.String(route53.ChangeActionDelete),
-					ResourceRecordSet: &route53.ResourceRecordSet{
-						Name: aws.String(srvRecordName),
-						Type: aws.String(route53.RRTypeSrv),
-						ResourceRecords: []*route53.ResourceRecord{
-							{
-								Value: aws.String(srvValue),
-							},
-						},
-						SetIdentifier: aws.String(configuration.Hostname + ":" + dockerId),
-						TTL:           aws.Int64(defaultTTL),
-						Weight:        aws.Int64(defaultWeight),
-					},
+					Action:            aws.String(route53.ChangeActionDelete),
+					ResourceRecordSet: recordSetToDelete,
 				},
 			},
 		},
@@ -311,7 +298,7 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 	}
 	_, err = r53.ChangeResourceRecordSets(params)
 	logErrorNoFatal(err)
-	fmt.Println("Record " + srvRecordName + " deleted ( " + srvValue + ")")
+	fmt.Println("Record " + srvRecordName + " deleted")
 	return err
 }
 
@@ -390,7 +377,7 @@ func syncDNSRecords() error {
 		return nil
 	}
 
-	changes := make([]*route53.Change, len(toDelete)+len(toAdd))
+	changes := make([]*route53.Change, 0, len(toDelete)+len(toAdd))
 
 	for _, rrs := range toDelete {
 		log.Infof("Removing SRV record %s %s", *rrs.Name, *rrs.ResourceRecords[0].Value)
@@ -419,7 +406,10 @@ func syncDNSRecords() error {
 	}
 
 	_, err = r53.ChangeResourceRecordSets(&route53.ChangeResourceRecordSetsInput{
-		ChangeBatch:  &route53.ChangeBatch{Changes: changes},
+		ChangeBatch: &route53.ChangeBatch{
+			Comment: aws.String("Service Discovery Created Record"),
+			Changes: changes,
+		},
 		HostedZoneId: aws.String(configuration.HostedZoneId),
 	})
 	logErrorNoFatal(err)
@@ -525,7 +515,11 @@ func main() {
 	}
 
 	configuration.HostedZoneId = zoneId
-	metadataClient := ec2metadata.New(session.New())
+	sess, err := session.NewSession()
+	if err != nil {
+		logErrorAndFail(err)
+	}
+	metadataClient := ec2metadata.New(sess)
 
 	if *hostnameOverride == "" {
 		hostname, err := metadataClient.GetMetadata("/hostname")
