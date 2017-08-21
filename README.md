@@ -1,6 +1,6 @@
 # Service Discovery for AWS EC2 Container Service
 ## Goals
-This project has been created to facilitate the creation of MicroServices on top of AWS ECS.
+This project has been created to facilitate the creation of microservices on top of AWS ECS.
 
 Some of the tenets are:
 
