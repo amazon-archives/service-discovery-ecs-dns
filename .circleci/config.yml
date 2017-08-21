@@ -12,8 +12,8 @@ buildsteps: &buildsteps
           command: go vet ./... | tee ${TEST_RESULTS}/go-vet-${VERSION}.out
 
       - run:
-          name: go build
-          command: go build -o ecssd_agent ./... | tee ${TEST_RESULTS}/go-build-${VERSION}.out
+          name: go install
+          command: go install ./... | tee ${TEST_RESULTS}/go-install-${VERSION}.out
 
       - store_artifacts:
           path: /tmp/test-results
