@@ -13,7 +13,7 @@ buildsteps: &buildsteps
 
       - run:
           name: go install
-          command: make install ./... | tee ${TEST_RESULTS}/go-install-${VERSION}.out
+          command: make install | tee ${TEST_RESULTS}/go-install-${VERSION}.out
 
       - store_artifacts:
           path: /tmp/test-results
