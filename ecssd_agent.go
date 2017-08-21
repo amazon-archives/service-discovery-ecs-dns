@@ -26,6 +26,7 @@ import (
 	docker "github.com/docker/docker/client"
 	log "github.com/sirupsen/logrus"
 	"io"
+	"os"
 )
 
 const workerTimeout = 180 * time.Second
@@ -417,6 +418,53 @@ func syncDNSRecords() error {
 	return err
 }
 
+// Remove all SRV records from the hosted zone associated with this host. Run this on the shutdown
+// event of the host.
+func removeAllDNSRecords() {
+	sess, err := session.NewSession()
+	if err != nil {
+		logErrorAndFail(err)
+	}
+	r53 := route53.New(sess)
+
+	changes := make([]*route53.Change, 0)
+
+	paramsList := &route53.ListResourceRecordSetsInput{
+		HostedZoneId: aws.String(configuration.HostedZoneId), // Required
+		MaxItems:     aws.String("100"),
+	}
+	more := true
+	resp, err := r53.ListResourceRecordSets(paramsList)
+	for more && err == nil {
+		for _, rrset := range resp.ResourceRecordSets {
+			if isManagedResourceRecordSet(rrset) {
+				log.Infof("Removing SRV record %s %s", *rrset.Name, *rrset.ResourceRecords[0].Value)
+				changes = append(changes, &route53.Change{
+					Action:            aws.String(route53.ChangeActionDelete),
+					ResourceRecordSet: rrset,
+				})
+			}
+		}
+
+		more = resp.IsTruncated != nil && *resp.IsTruncated
+		if more {
+			paramsList.StartRecordIdentifier = resp.NextRecordIdentifier
+			resp, err = r53.ListResourceRecordSets(paramsList)
+		}
+	}
+
+	if len(changes) > 0 {
+		_, err = r53.ChangeResourceRecordSets(&route53.ChangeResourceRecordSetsInput{
+			ChangeBatch: &route53.ChangeBatch{
+				Comment: aws.String("Service Discovery Created Record"),
+				Changes: changes,
+			},
+			HostedZoneId: aws.String(configuration.HostedZoneId),
+		})
+		logErrorNoFatal(err)
+	}
+}
+
 func getNetworkPortAndServiceName(container types.ContainerJSON, includePort bool) []ServiceInfo {
 	// One of the environment variables should be SERVICE_<port>_NAME = <name of the service>
 	// We look for this environment variable doing a split in the "=" and another one in the "_"
@@ -492,6 +540,8 @@ func main() {
 	var zoneId string
 
 	var sendEvents = flag.Bool("cw-send-events", false, "Send CloudWatch events when a container is created or terminated")
+	var remove = flag.Bool("remove", false, "Remove all DNS records associated with this instance")
+	var sync = flag.Bool("sync", false, "Synchronize this instance and exit")
 	var hostnameOverride = flag.String("hostname", "", "to use for registering the SRV records")
 
 	flag.Parse()
@@ -537,6 +587,21 @@ func main() {
 	region, err := metadataClient.Region()
 	configuration.Region = region
 	logErrorAndFail(err)
+
+	if *remove {
+		removeAllDNSRecords()
+
+		os.Exit(0)
+	}
+
+	dockerClient, _ = docker.NewEnvClient()
+
+	err = syncDNSRecords()
+	logErrorNoFatal(err)
+
+	if *sync {
+		os.Exit(0)
+	}
 
 	startFn := func(event events.Message) error {
 		var err error
@@ -604,13 +669,8 @@ func main() {
 	}
 	handlers := map[string][]handler{"start": {startHandler}, "die": {stopHandler}}
 
-	dockerClient, _ = docker.NewEnvClient()
 	router, err := dockerEventsRouter(5, dockerClient, handlers)
 	logErrorAndFail(err)
-
-	err = syncDNSRecords()
-	logErrorNoFatal(err)
-
 	defer router.stop()
 	router.start()
 	fmt.Println("Waiting events")
