@@ -196,6 +196,43 @@ func getDNSHostedZoneId() (string, error) {
 	return "", err
 }
 
+func createARecord(hostName string, localIP string) error {
+	sess, err := session.NewSession()
+	if err != nil {
+		return err
+	}
+	r53 := route53.New(sess)
+	aRecordName := configuration.Hostname
+	// This API call creates a new DNS record for this service
+	params := &route53.ChangeResourceRecordSetsInput{
+		ChangeBatch: &route53.ChangeBatch{
+			Changes: []*route53.Change{
+				{
+					Action: aws.String(route53.ChangeActionCreate),
+					ResourceRecordSet: &route53.ResourceRecordSet{
+						Name: aws.String(aRecordName),
+						// It creates an A record with the IP of the host running the agent
+						Type: aws.String(route53.RRTypeA),
+						ResourceRecords: []*route53.ResourceRecord{
+							{
+								Value: aws.String(localIP),
+							},
+						},
+						// TTL=0 to avoid DNS caches
+						TTL: aws.Int64(defaultTTL),
+					},
+				},
+			},
+			Comment: aws.String("Host A Record Created"),
+		},
+		HostedZoneId: aws.String(configuration.HostedZoneId),
+	}
+	_, err = r53.ChangeResourceRecordSets(params)
+	logErrorNoFatal(err)
+	fmt.Println("Record " + configuration.Hostname + " created, resolves to  " + localIP)
+	return err
+}
+
 func createSRVRecordSet(dockerId, port, serviceName string) *route53.ResourceRecordSet {
 	srvRecordName := serviceName + "." + DNSName
 
@@ -565,6 +602,7 @@ func main() {
 	}
 
 	configuration.HostedZoneId = zoneId
+
 	sess, err := session.NewSession()
 	if err != nil {
 		logErrorAndFail(err)
@@ -584,6 +622,9 @@ func main() {
 		configuration.Hostname = *hostnameOverride
 	}
 
+	localIP, err := metadataClient.GetMetadata("/local-ipv4")
+	logErrorAndFail(err)
+
 	region, err := metadataClient.Region()
 	configuration.Region = region
 	logErrorAndFail(err)
@@ -595,6 +636,10 @@ func main() {
 	}
 
 	dockerClient, _ = docker.NewEnvClient()
+
+	if err = createARecord(configuration.Hostname, localIP); err != nil {
+		log.Error("Error creating host A record")
+	}
 
 	err = syncDNSRecords()
 	logErrorNoFatal(err)
