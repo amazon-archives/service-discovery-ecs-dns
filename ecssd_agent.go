@@ -202,15 +202,14 @@ func createARecord(hostName string, localIP string) error {
 		return err
 	}
 	r53 := route53.New(sess)
-	aRecordName := configuration.Hostname
-	// This API call creates a new DNS record for this service
+	// This API call creates a new DNS record for this host
 	params := &route53.ChangeResourceRecordSetsInput{
 		ChangeBatch: &route53.ChangeBatch{
 			Changes: []*route53.Change{
 				{
 					Action: aws.String(route53.ChangeActionCreate),
 					ResourceRecordSet: &route53.ResourceRecordSet{
-						Name: aws.String(aRecordName),
+						Name: aws.String(hostName),
 						// It creates an A record with the IP of the host running the agent
 						Type: aws.String(route53.RRTypeA),
 						ResourceRecords: []*route53.ResourceRecord{
@@ -218,8 +217,10 @@ func createARecord(hostName string, localIP string) error {
 								Value: aws.String(localIP),
 							},
 						},
+						SetIdentifier: aws.String(hostName),
 						// TTL=0 to avoid DNS caches
-						TTL: aws.Int64(defaultTTL),
+						TTL:    aws.Int64(defaultTTL),
+						Weight: aws.Int64(defaultWeight),
 					},
 				},
 			},
@@ -231,6 +232,48 @@ func createARecord(hostName string, localIP string) error {
 	logErrorNoFatal(err)
 	fmt.Println("Record " + configuration.Hostname + " created, resolves to  " + localIP)
 	return err
+}
+
+func removeARecord(hostName string) error {
+	sess, err := session.NewSession()
+	logErrorAndFail(err)
+	r53 := route53.New(sess)
+
+	paramsList := &route53.ListResourceRecordSetsInput{
+		HostedZoneId:    aws.String(configuration.HostedZoneId), // Required
+		MaxItems:        aws.String("1"),
+		StartRecordName: aws.String(hostName),
+		StartRecordType: aws.String(route53.RRTypeA),
+	}
+	resp, err := r53.ListResourceRecordSets(paramsList)
+	if err != nil {
+		return err
+	}
+
+	if len(resp.ResourceRecordSets) == 1 {
+		rrset := resp.ResourceRecordSets[0]
+		if rrset.SetIdentifier != nil && *rrset.SetIdentifier == hostName {
+			log.Infof("Removing A record %s %s", *rrset.Name, *rrset.ResourceRecords[0].Value)
+			_, err = r53.ChangeResourceRecordSets(&route53.ChangeResourceRecordSetsInput{
+				ChangeBatch: &route53.ChangeBatch{
+					Comment: aws.String("Service Discovery Created Record"),
+					Changes: []*route53.Change{
+						{
+							Action:            aws.String(route53.ChangeActionDelete),
+							ResourceRecordSet: rrset,
+						},
+					},
+				},
+				HostedZoneId: aws.String(configuration.HostedZoneId),
+			})
+			if err != nil {
+				logErrorNoFatal(err)
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func createSRVRecordSet(dockerId, port, serviceName string) *route53.ResourceRecordSet {
@@ -455,13 +498,10 @@ func syncDNSRecords() error {
 	return err
 }
 
-// Remove all SRV records from the hosted zone associated with this host. Run this on the shutdown
-// event of the host.
-func removeAllDNSRecords() {
+// Remove all SRV records from the hosted zone associated with this host. Run this on the shutdown event of the host.
+func removeAllSRVRecords() {
 	sess, err := session.NewSession()
-	if err != nil {
-		logErrorAndFail(err)
-	}
+	logErrorAndFail(err)
 	r53 := route53.New(sess)
 
 	changes := make([]*route53.Change, 0)
@@ -558,9 +598,7 @@ func sendToCWEvents(detail string, detailType string, resource string, source st
 
 func getTaskArn(dockerID string) string {
 	resp, err := http.Get("http://127.0.0.1:51678/v1/tasks")
-	if err != nil {
-		logErrorAndFail(err)
-	}
+	logErrorAndFail(err)
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
 	bodyStr := string(body)
@@ -604,9 +642,7 @@ func main() {
 	configuration.HostedZoneId = zoneId
 
 	sess, err := session.NewSession()
-	if err != nil {
-		logErrorAndFail(err)
-	}
+	logErrorAndFail(err)
 	metadataClient := ec2metadata.New(sess)
 
 	if *hostnameOverride == "" {
@@ -630,7 +666,8 @@ func main() {
 	logErrorAndFail(err)
 
 	if *remove {
-		removeAllDNSRecords()
+		removeAllSRVRecords()
+		removeARecord(configuration.Hostname)
 
 		os.Exit(0)
 	}
