@@ -473,8 +473,8 @@ func syncDNSRecords() error {
 		if err != nil {
 			continue
 		}
-		allService := getNetworkPortAndServiceName(container, true)
-		for _, svc := range allService {
+		allServices := getNetworkPortAndServiceName(container, true)
+		for _, svc := range allServices {
 			if svc.Name != "" && svc.Port != "" {
 				rrs := createSRVRecordSet(id, svc.Port, svc.Name)
 				log.Infof("Adding SRV record %s %s", *rrs.Name, *rrs.ResourceRecords[0].Value)
@@ -486,16 +486,19 @@ func syncDNSRecords() error {
 		}
 	}
 
-	_, err = r53.ChangeResourceRecordSets(&route53.ChangeResourceRecordSetsInput{
-		ChangeBatch: &route53.ChangeBatch{
-			Comment: aws.String("Service Discovery Created Record"),
-			Changes: changes,
-		},
-		HostedZoneId: aws.String(configuration.HostedZoneId),
-	})
-	logErrorNoFatal(err)
+	if len(changes) > 0 {
+		_, err = r53.ChangeResourceRecordSets(&route53.ChangeResourceRecordSetsInput{
+			ChangeBatch: &route53.ChangeBatch{
+				Comment: aws.String("Service Discovery Created Record"),
+				Changes: changes,
+			},
+			HostedZoneId: aws.String(configuration.HostedZoneId),
+		})
+		logErrorNoFatal(err)
+		return err
+	}
 
-	return err
+	return nil
 }
 
 // Remove all SRV records from the hosted zone associated with this host. Run this on the shutdown event of the host.
