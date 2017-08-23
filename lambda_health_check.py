@@ -108,15 +108,16 @@ def process_records(response, ecs_data):
                                 print("Task %s stopped" % task)
 
         elif record['Type'] == 'A':
-            for rr in record['ResourceRecords']:
-                if (ecs_data['clusterPrivateIPs'].count(rr['Value']) == 0) and (record['Name'] == ('ip-' + rr['Value'].replace('.', '-') + '.' + domain + '.')):
-                    delete_route53_record(record, 'Instance no longer exists in cluster')
-                    print("Record %s deleted" % rr['Value'])
-                    break
+            if 'ResourceRecords' in record:
+                for rr in record['ResourceRecords']:
+                    if (ecs_data['clusterPrivateIPs'].count(rr['Value']) == 0) and (record['Name'] == ('ip-' + rr['Value'].replace('.', '-') + '.' + domain + '.')):
+                        delete_route53_record(record, 'Instance no longer exists in cluster')
+                        print("Record %s deleted" % rr['Value'])
+                        break
 
-                elif ecs_data['clusterPrivateIPs'].count(rr['Value']) > 1:
-                    print("ERROR: IP %s exists on multiple cluster instances" % rr['Value'])
-                    break
+                    elif ecs_data['clusterPrivateIPs'].count(rr['Value']) > 1:
+                        print("ERROR: IP %s exists on multiple cluster instances" % rr['Value'])
+                        break
 
     
     if response['IsTruncated']:
