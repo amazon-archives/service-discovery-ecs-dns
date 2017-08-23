@@ -7,7 +7,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"io/ioutil"
 	"net/http"
 	"strconv"
@@ -230,7 +229,9 @@ func createARecord(hostName string, localIP string) error {
 	}
 	_, err = r53.ChangeResourceRecordSets(params)
 	logErrorNoFatal(err)
-	fmt.Println("Record " + configuration.Hostname + " created, resolves to  " + localIP)
+	if err == nil {
+		log.Info("Record " + configuration.Hostname + " created, resolves to " + localIP)
+	}
 	return err
 }
 
@@ -320,7 +321,7 @@ func createDNSRecord(serviceName string, dockerId string, port string) error {
 	}
 	_, err = r53.ChangeResourceRecordSets(params)
 	logErrorNoFatal(err)
-	fmt.Println("Record " + *params.ChangeBatch.Changes[0].ResourceRecordSet.Name + " created (1 1 " + port + " " + configuration.Hostname + ")")
+	log.Info("Record " + *params.ChangeBatch.Changes[0].ResourceRecordSet.Name + " created (1 1 " + port + " " + configuration.Hostname + ")")
 	return err
 }
 
@@ -379,7 +380,9 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 	}
 	_, err = r53.ChangeResourceRecordSets(params)
 	logErrorNoFatal(err)
-	fmt.Println("Record " + srvRecordName + " deleted")
+	if err == nil {
+		log.Info("Record " + srvRecordName + " deleted")
+	}
 	return err
 }
 
@@ -713,7 +716,7 @@ func main() {
 			taskArn := getTaskArn(event.ID)
 			sendToCWEvents(`{ "dockerId": "`+event.ID+`","TaskArn":"`+taskArn+`" }`, "Task Started", configuration.Hostname, "awslabs.ecs.container")
 		}
-		fmt.Println("Docker " + event.ID + " started")
+		log.Info("Docker " + event.ID + " started")
 		return nil
 	}
 
@@ -742,7 +745,7 @@ func main() {
 			taskArn := getTaskArn(event.ID)
 			sendToCWEvents(`{ "dockerId": "`+event.ID+`","TaskArn":"`+taskArn+`" }`, "Task Stopped", configuration.Hostname, "awslabs.ecs.container")
 		}
-		fmt.Println("Docker " + event.ID + " stopped")
+		log.Info("Docker " + event.ID + " stopped")
 		return nil
 	}
 
@@ -758,6 +761,6 @@ func main() {
 	logErrorAndFail(err)
 	defer router.stop()
 	router.start()
-	fmt.Println("Waiting events")
+	log.Info("Waiting events")
 	select {}
 }
