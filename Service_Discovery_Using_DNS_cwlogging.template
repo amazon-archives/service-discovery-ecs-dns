@@ -562,7 +562,7 @@
                             },
                             {
                                 "Name": "SERVICE_8081_NAME",
-                                "Value": "time"
+                                "Value": "_time._tcp"
                             }
                         ]
                     }
@@ -606,7 +606,7 @@
                             },
                             {
                                 "Name": "SERVICE_8081_NAME",
-                                "Value": "calc"
+                                "Value": "_calc._tcp"
                             }
                         ]
                     }

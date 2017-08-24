@@ -70,7 +70,7 @@ Create a Lambda function using [this code](lambda_health_check.py), you can modi
 You should then schedule the Lambda funtion to run every 5 minutes with the `python3.6` runtime.
 
 ## Usage
-Once the cluster is created, you can start launching tasks and services into the ECS Cluster. For each task you want to register as a microservice, you should specify an environment variable in the task definition, the name of the variable should be `SERVICE_<port>_NAME`, where `<port>` is the port where your service is going to listen inside the container, and the value is the name of the microservice. You can define multiple services per container using different ports.
+Once the cluster is created, you can start launching tasks and services into the ECS Cluster. For each task you want to register as a microservice, you should specify an environment variable in the task definition, the name of the variable should be `SERVICE_<port>_NAME`, where `<port>` is the port where your service is going to listen inside the container, and the value is the name of the microservice with the standard scheme `_service._proto` (see https://en.wikipedia.org/wiki/SRV_record), for example `SERVICE_8081_NAME=_calc._tcp`. You can define multiple services per container using different ports.
 
 You should publish the port of the container using the `PortMappings` properties. When you publish the port I recommend you to not specify the `HostPort` and leave it to be assigned randomly within the ephemeral port range, this way you could have multiple containers of the same service running in the same server.
 
@@ -107,6 +107,6 @@ curl -u admin:password 127.0.0.1:32799/calc/\(2+2\)*3
 ```
 * portal: This is a web service to provide a web portal with two boxes to test time and calc services. The portal uses the service discovery DNS to discover the other services and send the request to them showing the results in the web page.
 
-You can launch the examples using the cloudformation template "Service_Discovery_Using_DNS.template", then you can connect to the portal from a browser and test both microservices and the service discovery.
+You can launch the examples using the [CloudFormation template](Service_Discovery_Using_DNS.template), then you can connect to the portal from a browser and test both microservices and the service discovery.
 
-You can review the Route53 records created by the service (only for time and calc, because portal is not a microservice and it doesn't provide the SERVICE_\<port>_NAME env variable), and stop a container to see how the Route53 records change automatically.
+You can review the Route53 records created by the service (only for time and calc, because portal is not a microservice and it doesn't provide the `SERVICE_<port>_NAME` environment variable), and stop a container to see how the Route53 records change automatically.

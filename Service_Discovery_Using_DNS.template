@@ -471,15 +471,15 @@
                         "Environment": [
                             {
                                 "Name": "TIME_USERNAME",
-                                "Value": "admin"
+                                "Value": "_admin._tcp"
                             },
                             {
                                 "Name": "TIME_PASSWORD",
-                                "Value": "password"
+                                "Value": "_password._tcp"
                             },
                             {
                                 "Name": "SERVICE_8081_NAME",
-                                "Value": "time"
+                                "Value": "_time._tcp"
                             }
                         ]
                     }
@@ -515,15 +515,15 @@
                         "Environment": [
                             {
                                 "Name": "CALC_USERNAME",
-                                "Value": "admin"
+                                "Value": "_admin._tcp"
                             },
                             {
                                 "Name": "CALC_PASSWORD",
-                                "Value": "password"
+                                "Value": "_password._tcp"
                             },
                             {
                                 "Name": "SERVICE_8081_NAME",
-                                "Value": "calc"
+                                "Value": "_calc._tcp"
                             }
                         ]
                     }
