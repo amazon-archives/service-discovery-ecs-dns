@@ -7,7 +7,7 @@ from __future__ import print_function
 
 import json
 import boto3
-import httplib
+import http.client
 import re
 import socket
 
@@ -40,7 +40,7 @@ def get_ip_port(rr):
 
 def check_health(ip, port):
     try:
-        conn = httplib.HTTPConnection(ip, int(port), timeout=2)
+        conn = http.client.HTTPConnection(ip, int(port), timeout=2)
         conn.request("GET", check_health_path)
         r1 = conn.getresponse()
         if r1.status != 200:
