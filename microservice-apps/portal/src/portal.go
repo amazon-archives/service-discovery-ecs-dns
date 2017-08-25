@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 )
 
 // Spec represents the ErrorResponse response object.
