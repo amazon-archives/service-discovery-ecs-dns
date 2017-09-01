@@ -59,10 +59,10 @@ func CalcHandler(res http.ResponseWriter, req *http.Request) {
 // Call the remote web service and return the result as a string
 func GetHttpResponse(url string) string {
 	response, err := http.Get(url)
-	defer response.Body.Close()
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer response.Body.Close()
 
 	contents, err := ioutil.ReadAll(response.Body)
 	if err != nil {

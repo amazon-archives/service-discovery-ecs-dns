@@ -1,0 +1,51 @@
+defaults: &defaults
+    working_directory: /home/circleci/src/github.com/bankrs/service-discovery-ecs-dns
+
+buildsteps: &buildsteps
+    steps:
+      - checkout
+
+      - run: mkdir -p $TEST_RESULTS
+
+      - run:
+          name: go vet
+          command: make vet | tee ${TEST_RESULTS}/go-vet-${VERSION}.out
+
+      - run:
+          name: go install
+          command: make install | tee ${TEST_RESULTS}/go-install-${VERSION}.out
+
+      - store_artifacts:
+          path: /tmp/test-results
+          destination: raw-test-output
+
+      - store_test_results:
+          path: /tmp/test-results
+
+jobs:
+  go-1.9:
+    <<: *defaults
+    environment:
+      GOPATH: /home/circleci
+      TEST_RESULTS: /tmp/test-results
+      VERSION: 1.9
+    docker:
+      - image: golang:1.9
+    <<: *buildsteps
+
+  go-1.8:
+    <<: *defaults
+    environment:
+      GOPATH: /home/circleci
+      TEST_RESULTS: /tmp/test-results
+      VERSION: 1.8
+    docker:
+      - image: golang:1.8
+    <<: *buildsteps
+
+workflows:
+  version: 2
+  build:
+    jobs:
+      - go-1.9
+      - go-1.8

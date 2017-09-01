@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 )
 
 // Spec represents the ErrorResponse response object.
@@ -49,10 +48,10 @@ func TimeHandler(res http.ResponseWriter, req *http.Request) {
 	}
 	cli := &http.Client{}
 	response, err := cli.Do(req)
-	defer response.Body.Close()
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer response.Body.Close()
 
 	if response.StatusCode != 200 {
 		log.Printf("Got Error response: %s\n", response.Status)
@@ -94,13 +93,13 @@ func CalcHandler(res http.ResponseWriter, req *http.Request) {
 	}
 	cli := &http.Client{}
 	response, err := cli.Do(req)
-	defer response.Body.Close()
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer response.Body.Close()
 
 	if response.StatusCode != 200 {
-		log.Printf("Got Error response: %s\n", response.Status)
+		log.Printf("Got error response: %s\n", response.Status)
 		errorMsg := ErrorResponse{Error: response.Status}
 		if err := json.NewEncoder(res).Encode(errorMsg); err != nil {
 			log.Panic(err)
@@ -111,7 +110,7 @@ func CalcHandler(res http.ResponseWriter, req *http.Request) {
 			log.Fatal(err)
 		}
 
-		log.Printf("Got Successful response: %s\n", string(contents))
+		log.Printf("Got successful response: %s\n", string(contents))
 		res.Write(contents)
 	}
 }
@@ -120,11 +119,11 @@ func CalcHandler(res http.ResponseWriter, req *http.Request) {
 func GetTimeEndpoint() (string, error) {
 	var addrs []*net.SRV
 	var err error
-	if _, addrs, err = net.LookupSRV("", "", "time.servicediscovery.internal"); err != nil {
+	if _, addrs, err = net.LookupSRV("time", "tcp", "servicediscovery.internal"); err != nil {
 		return "", err
 	}
 	for _, addr := range addrs {
-		return strings.TrimRight(addr.Target, ".") + ":" + strconv.Itoa(int(addr.Port)), nil
+		return addr.Target + ":" + strconv.Itoa(int(addr.Port)), nil
 	}
 	return "", errors.New("No record found")
 }
@@ -133,11 +132,11 @@ func GetTimeEndpoint() (string, error) {
 func GetCalcEndpoint() (string, error) {
 	var addrs []*net.SRV
 	var err error
-	if _, addrs, err = net.LookupSRV("", "", "calc.servicediscovery.internal"); err != nil {
+	if _, addrs, err = net.LookupSRV("calc", "tcp", "servicediscovery.internal"); err != nil {
 		return "", err
 	}
 	for _, addr := range addrs {
-		return strings.TrimRight(addr.Target, ".") + ":" + strconv.Itoa(int(addr.Port)), nil
+		return addr.Target + ":" + strconv.Itoa(int(addr.Port)), nil
 	}
 	return "", errors.New("No record found")
 }
