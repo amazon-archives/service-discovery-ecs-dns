@@ -148,17 +148,18 @@ def get_service_for_port(port, environment):
     return ""
 
 def get_ecs_data():
+    list_ec2_instances = {}
+    list_ecs_private_ips = []
+    list_instance_arns = {}
+    list_tasks = {}
     for cluster_name in ecs_clusters:
         response = ecs.list_container_instances(cluster=cluster_name)
-        list_instance_arns = {}
         for instance_arn in response['containerInstanceArns']:
             list_instance_arns[instance_arn] = {'cluster': cluster_name}
         if len(list_instance_arns.keys()) > 0:
             response = ecs.describe_container_instances(
                 cluster=cluster_name,
                 containerInstances=list_instance_arns.keys())
-            list_ec2_instances = {}
-            list_ecs_private_ips = []
             for instance in response['containerInstances']:
                 list_ec2_instances[instance['ec2InstanceId']] = {'instanceArn': instance['containerInstanceArn']}
                 list_instance_arns[instance['containerInstanceArn']]['instanceId'] = instance['ec2InstanceId']
@@ -169,7 +170,6 @@ def get_ecs_data():
                         list_ec2_instances[instance['InstanceId']]['privateIP'] = instance['PrivateIpAddress']
                         list_ecs_private_ips.append(instance['PrivateIpAddress'])
         response = ecs.list_tasks(cluster=cluster_name, desiredStatus='RUNNING')
-        list_tasks = {}
         if len(response['taskArns']) > 0:
             responseTasks = ecs.describe_tasks(cluster = cluster_name, tasks = response['taskArns'])
             for task in responseTasks['tasks']:
