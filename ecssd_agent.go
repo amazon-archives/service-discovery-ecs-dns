@@ -208,7 +208,7 @@ func createARecord(hostName string, localIP string) error {
 				{
 					Action: aws.String(route53.ChangeActionCreate),
 					ResourceRecordSet: &route53.ResourceRecordSet{
-						Name: aws.String(hostName),
+						Name: aws.String(strings.Split(hostName, ".")[0]),
 						// It creates an A record with the IP of the host running the agent
 						Type: aws.String(route53.RRTypeA),
 						ResourceRecords: []*route53.ResourceRecord{
@@ -243,7 +243,7 @@ func removeARecord(hostName string) error {
 	paramsList := &route53.ListResourceRecordSetsInput{
 		HostedZoneId:    aws.String(configuration.HostedZoneId), // Required
 		MaxItems:        aws.String("1"),
-		StartRecordName: aws.String(hostName),
+		StartRecordName: aws.String(strings.Split(hostName, ".")[0]),
 		StartRecordType: aws.String(route53.RRTypeA),
 	}
 	resp, err := r53.ListResourceRecordSets(paramsList)
