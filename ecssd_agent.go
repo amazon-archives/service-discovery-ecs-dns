@@ -290,7 +290,7 @@ func createSRVRecordSet(dockerId, port, serviceName string) *route53.ResourceRec
 				// weight: A relative weight for records with the same priority, higher value means more preferred
 				// port: the TCP or UDP port on which the service is to be found
 				// target: the canonical hostname of the machine providing the service
-				Value: aws.String("1 1 " + port + " " + configuration.Hostname),
+				Value: aws.String("1 1 " + port + " " + configuration.Hostname + "." + DNSName),
 			},
 		},
 		SetIdentifier: aws.String(configuration.Hostname + ":" + dockerId),
