@@ -159,12 +159,12 @@ def get_ecs_data():
         if len(list_instance_arns.keys()) > 0:
             response = ecs.describe_container_instances(
                 cluster=cluster_name,
-                containerInstances=list_instance_arns.keys())
+                containerInstances=list(list_instance_arns.keys()))
             for instance in response['containerInstances']:
                 list_ec2_instances[instance['ec2InstanceId']] = {'instanceArn': instance['containerInstanceArn']}
                 list_instance_arns[instance['containerInstanceArn']]['instanceId'] = instance['ec2InstanceId']
             if len(list_ec2_instances.keys()) > 0:
-                response = ec2.describe_instances(InstanceIds=list_ec2_instances.keys())
+                response = ec2.describe_instances(InstanceIds=list(list_ec2_instances.keys()))
                 for reservation in response['Reservations']:
                     for instance in reservation['Instances']:
                         list_ec2_instances[instance['InstanceId']]['privateIP'] = instance['PrivateIpAddress']
