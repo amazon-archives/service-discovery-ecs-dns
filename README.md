@@ -17,7 +17,7 @@ To create an ECS cluster with all the required configuration and the Route53 dom
 
 You should create a Lambda function to monitor the services, in case a host fails completely and the agent cannot delete the records. You can also use the Lambda function to do HTTP health checks for your containers.
 
-Create a role for the Lambda function, this role should have full access to Route53 (at least to the internal hosted zone), read only access to ECS, read only access to EC2 and to your VPC. The Lambda function needs to call the AWS APIs and should be added to a subnet that provides internet access via a NAT gateway and should have a security group that allows the respective outbound traffic.
+Create a role for the Lambda function, this role should have full access to Route53 (at least to the internal hosted zone), read and stop tasks access to ECS, read only access to EC2 and to your VPC. The Lambda function needs to call the AWS APIs and should be added to a subnet that provides internet access via a NAT gateway and should have a security group that allows the respective outbound traffic.
 
 Example CloudFormation template:
 ```
@@ -41,14 +41,15 @@ Example CloudFormation template:
         ],
         "Policies": [
           {
-            "PolicyName": "ecs-read-only",
+            "PolicyName": "ecs-read-stop",
             "PolicyDocument": {
               "Statement": [
                 {
                   "Effect": "Allow",
                   "Action": [
                     "ecs:Describe*",
-                    "ecs:List*"
+                    "ecs:List*",
+                    "ecs:StopTask"
                   ],
                   "Resource": "*"
                 }
