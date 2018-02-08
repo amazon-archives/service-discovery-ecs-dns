@@ -154,9 +154,9 @@ def get_service_for_port(port, environment):
 
     return ""
 
-def get_ecs_data():
+def get_ecs_data(clusters):
     data = []
-    for cluster_name in ecs_clusters:
+    for cluster_name in clusters:
         list_ec2_instances = {}
         list_ecs_private_ips = []
         list_instance_arns = {}
@@ -196,18 +196,21 @@ def get_ecs_data():
 
 def lambda_handler(event, context):
     #print('Starting')
-    
+    clusters = None
     if len(ecs_clusters) == 0:
+        clusters = []
         response = ecs.list_clusters()
         for cluster in response['clusterArns']:
-            ecs_clusters.append(cluster)
+            clusters.append(cluster)
+    else:
+        clusters = ecs_clusters
 
     #print (ecs_clusters)
     response = route53.list_resource_record_sets(HostedZoneId=hostedZoneId)
-    
-    ecs_data = get_ecs_data()
+
+    ecs_data = get_ecs_data(clusters)
     #print(ecs_data)
-    
+
     process_records(response, ecs_data)
 
     return 'Service Discovery Health Check finished'
