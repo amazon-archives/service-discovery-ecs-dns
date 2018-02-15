@@ -29,7 +29,13 @@ ec2 = boto3.client('ec2')
 response = route53.list_hosted_zones_by_name(DNSName=domain)
 if len(response['HostedZones']) == 0:
     raise Exception('Zone not found')
-hostedZoneId = response['HostedZones'][0]['Id']
+
+for zone in response['HostedZones']:
+    if zone['Config']['PrivateZone']:
+        hostedZoneId = zone['Id']
+
+if not hostedZoneId:
+    hostedZoneId = response['HostedZones'][0]['Id']
 
 def get_ip_port(rr):
     try:
