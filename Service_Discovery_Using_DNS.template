@@ -435,7 +435,7 @@
                     "yum update -y aws-cfn-bootstrap\n",
                     "yum install -y git aws-cli\n",
                     "git clone https://github.com/awslabs/service-discovery-ecs-dns.git\n",
-                    "$(aws ecr get-login --region ", { "Ref": "AWS::Region" }, ")\n",
+                    "$(aws ecr get-login --no-include-email --region ", { "Ref": "AWS::Region" }, ")\n",
                     "docker build -t ", { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/time-demo-service service-discovery-ecs-dns/microservice-apps/time\n",
                     "docker build -t ", { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/calc-demo-service service-discovery-ecs-dns/microservice-apps/calc\n",
                     "docker build -t ", { "Ref" : "AWS::AccountId" }, ".dkr.ecr.", { "Ref": "AWS::Region" }, ".amazonaws.com/portal-demo-service service-discovery-ecs-dns/microservice-apps/portal\n",
