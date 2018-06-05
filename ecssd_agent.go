@@ -333,35 +333,34 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 	r53 := route53.New(sess)
 	srvRecordName := serviceName + "." + DNSName
 	srvSetIdentifier := configuration.Hostname + ":" + dockerId
+	log.Infof("Deleting Record %s (%s)", srvRecordName, srvSetIdentifier)
 	// This API Call looks for the Route53 DNS record for this service and docker ID to get the values to delete
 	paramsList := &route53.ListResourceRecordSetsInput{
-		HostedZoneId:    aws.String(configuration.HostedZoneId), // Required
-		MaxItems:        aws.String("100"),
-		StartRecordName: aws.String(srvRecordName),
-		StartRecordType: aws.String(route53.RRTypeSrv),
+		HostedZoneId:          aws.String(configuration.HostedZoneId), // Required
+		MaxItems:              aws.String("100"),
+		StartRecordIdentifier: aws.String(srvSetIdentifier),
+		StartRecordName:       aws.String(srvRecordName),
+		StartRecordType:       aws.String(route53.RRTypeSrv),
 	}
-	more := true
 	var recordSetToDelete *route53.ResourceRecordSet
 	resp, err := r53.ListResourceRecordSets(paramsList)
-	for more && recordSetToDelete == nil && err == nil {
-		for _, rrset := range resp.ResourceRecordSets {
-			if isManagedResourceRecordSet(rrset) && *rrset.SetIdentifier == srvSetIdentifier {
-				recordSetToDelete = rrset
-			}
-		}
-
-		more = resp.IsTruncated != nil && *resp.IsTruncated
-		if more {
-			paramsList.StartRecordIdentifier = resp.NextRecordIdentifier
-			resp, err = r53.ListResourceRecordSets(paramsList)
-		}
-	}
-	logErrorNoFatal(err)
 	if err != nil {
+		logErrorNoFatal(err)
 		return err
 	}
+
+	if len(resp.ResourceRecordSets) > 0 {
+		rrset := resp.ResourceRecordSets[0]
+		if isManagedResourceRecordSet(rrset) &&
+		   *rrset.SetIdentifier == srvSetIdentifier &&
+		   strings.HasPrefix(*rrset.Name, srvRecordName) &&
+		   *rrset.Type == route53.RRTypeSrv  {
+			recordSetToDelete = rrset
+		}
+	}
+
 	if recordSetToDelete == nil {
-		log.Error("Route53 record doesn't exist")
+		log.Errorf("Route53 record %s (%s) doesn't exist", srvRecordName, srvSetIdentifier)
 		return nil
 	}
 
@@ -381,7 +380,7 @@ func deleteDNSRecord(serviceName string, dockerId string) error {
 	_, err = r53.ChangeResourceRecordSets(params)
 	logErrorNoFatal(err)
 	if err == nil {
-		log.Info("Record " + srvRecordName + " deleted")
+		log.Infof("Record %s (%s) deleted", srvRecordName, srvSetIdentifier)
 	}
 	return err
 }
